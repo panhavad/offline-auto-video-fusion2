@@ -53,29 +53,39 @@
 				<section class="panel" id="panel-settings">
 					<h2><span class="step">2</span> Settings</h2>
 					<div class="settings-grid">
-					<label class="field">
+					<label class="field field-orientation">
 						<span class="field-label"><span class="control-icon" aria-hidden="true">◫</span>Orientation</span>
 						<select id="orientation">
 							<option value="landscape">Landscape only</option>
 							<option value="portrait">Portrait only</option>
 							<option value="any">Any orientation</option>
 						</select>
-						<small>Clips that do not match are ignored.</small>
+					</label>
+
+					<label class="field field-max-clip">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">◷</span>Max clip (s)</span>
+						<input type="number" id="max-clip" min="0" max="3600" step="1" />
 					</label>
 
 					<label class="field">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">◷</span>Max length per clip (s)</span>
-						<input type="number" id="max-clip" min="0" max="3600" step="1" />
-						<small>Longer clips are trimmed. 0 = keep full length.</small>
+						<span class="field-label"><span class="control-icon" aria-hidden="true">◴</span>Frame rate</span>
+						<select id="frame-rate">
+							<option value="auto">Auto</option>
+							<option value="24">24 fps</option>
+							<option value="25">25 fps</option>
+							<option value="30">30 fps</option>
+							<option value="50">50 fps</option>
+							<option value="60">60 fps</option>
+							<option value="120">120 fps</option>
+						</select>
 					</label>
 
-					<label class="field field-wide">
+					<label class="field field-title">
 						<span class="field-label"><span class="control-icon control-icon-text" aria-hidden="true">T</span>Title text</span>
 						<input type="text" id="title-text" placeholder="Shown on every frame (leave empty for none)" />
-						<small>Use Shift+Enter style line breaks by typing \n for a second line.</small>
 					</label>
 
-					<label class="field">
+					<label class="field field-title-position">
 						<span class="field-label"><span class="control-icon" aria-hidden="true">⌖</span>Title position</span>
 						<select id="title-position">
 							<option value="top-left">Top left</option>
@@ -90,67 +100,19 @@
 						</select>
 					</label>
 
-					<label class="field">
+					<label class="field field-title-color">
 						<span class="field-label"><span class="control-icon" aria-hidden="true">●</span>Title color</span>
 						<span class="color-row">
 							<input type="color" id="title-color" aria-label="Title color picker" />
 							<input type="text" id="title-color-hex" spellcheck="false" aria-label="Title color hex value" />
 						</span>
-						<small>Default white.</small>
 					</label>
 
-					<label class="field">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">↕</span>Title size (% of height)</span>
+					<label class="field field-title-size">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">↕</span>Title size (%)</span>
 						<input type="number" id="title-scale" min="2" max="30" step="0.5" />
 					</label>
 
-					<label class="field">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">▣</span>Output resolution</span>
-						<select id="resolution">
-							<option value="auto">Auto (first clip, max 1080p)</option>
-							<option value="2160">2160p (4K)</option>
-							<option value="1440">1440p</option>
-							<option value="1080">1080p</option>
-							<option value="720">720p</option>
-							<option value="480">480p</option>
-						</select>
-					</label>
-
-					<label class="field">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">◴</span>Frame rate</span>
-						<select id="frame-rate">
-							<option value="24">24 fps</option>
-							<option value="25">25 fps</option>
-							<option value="30">30 fps</option>
-							<option value="50">50 fps</option>
-							<option value="60">60 fps</option>
-						</select>
-						<small>Upper limit; source frames are never duplicated.</small>
-					</label>
-
-					<label class="field">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">◆</span>Quality</span>
-						<select id="quality">
-							<option value="high">High</option>
-							<option value="medium">Medium</option>
-							<option value="low">Low</option>
-						</select>
-					</label>
-
-					<label class="field">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">⤢</span>Scaling</span>
-						<select id="fit">
-							<option value="contain">Contain (letterbox, no crop)</option>
-							<option value="cover">Cover (fill, crops edges)</option>
-						</select>
-					</label>
-
-					<div class="field toggles">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">⚙</span>Processing</span>
-						<label class="check"><input type="checkbox" id="title-shadow" /><span><span class="control-icon" aria-hidden="true">◐</span>Title shadow</span></label>
-						<label class="check"><input type="checkbox" id="include-audio" /><span><span class="control-icon" aria-hidden="true">♪</span>Keep audio</span></label>
-						<label class="check"><input type="checkbox" id="prefer-hardware" /><span><span class="control-icon" aria-hidden="true">⚡</span>Prefer GPU encoding</span></label>
-					</div>
 					</div>
 				</section>
 			</div>

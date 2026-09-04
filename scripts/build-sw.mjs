@@ -3,6 +3,10 @@
  *
  * The service worker precaches every file emitted into dist/, which is what makes the app keep
  * working after the server goes away: load it once, then use it forever, fully offline.
+ *
+ * Entries are cached one by one rather than with `cache.addAll`, which is atomic: a single
+ * unreadable asset would abort the whole install and leave the page with no worker at all.
+ * Progress is broadcast to open pages so a slow precache can show a percentage.
  */
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
@@ -48,14 +52,71 @@ const VERSION = '${version}';
 const CACHE_PREFIX = 'auto-video-fusion-';
 const CACHE_NAME = CACHE_PREFIX + VERSION;
 const PRECACHE = ${JSON.stringify(precache, null, '\t')};
+// Enough parallelism to keep the connection busy without starving the network on a
+// slow NAS link, where a serial precache would look like it had hung.
+const CONCURRENCY = 6;
+
+// Snapshot of precache progress so a page that loads mid-install can ask for the
+// current state instead of waiting for the next broadcast.
+let status = {
+	type: 'precache-progress',
+	version: VERSION,
+	state: 'idle',
+	done: 0,
+	total: PRECACHE.length,
+	failed: [],
+};
+
+const broadcast = async () => {
+	const clients = await self.clients.matchAll({ includeUncontrolled: true, type: 'window' });
+	for (const client of clients) client.postMessage(status);
+};
+
+const precacheAll = async () => {
+	const cache = await caches.open(CACHE_NAME);
+	status = { ...status, state: 'caching', done: 0, failed: [] };
+	await broadcast();
+
+	const queue = PRECACHE.slice();
+	const failed = [];
+	let done = 0;
+
+	const drain = async () => {
+		for (;;) {
+			const url = queue.shift();
+			if (url === undefined) return;
+			try {
+				// 'reload' bypasses the HTTP cache so a precache always stores fresh bytes.
+				const response = await fetch(new Request(url, { cache: 'reload' }));
+				if (!response.ok) throw new Error('HTTP ' + response.status);
+				await cache.put(url, response);
+			} catch {
+				// Individual failures must not abort the install the way cache.addAll would:
+				// one unreadable asset would otherwise leave the app with no worker at all.
+				failed.push(url);
+			}
+			done += 1;
+			status = { ...status, done, failed: failed.slice() };
+			await broadcast();
+		}
+	};
+
+	await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, drain));
+
+	status = { ...status, state: failed.length ? 'incomplete' : 'ready', done, failed: failed.slice() };
+	await broadcast();
+};
 
 self.addEventListener('install', (event) => {
-	event.waitUntil(
-		caches
-			.open(CACHE_NAME)
-			.then((cache) => cache.addAll(PRECACHE))
-			.then(() => self.skipWaiting()),
-	);
+	event.waitUntil(precacheAll().then(() => self.skipWaiting()));
+});
+
+self.addEventListener('message', (event) => {
+	const data = event.data;
+	if (!data || data.type !== 'precache-status') return;
+	const port = event.ports && event.ports[0];
+	if (port) port.postMessage(status);
+	else if (event.source) event.source.postMessage(status);
 });
 
 self.addEventListener('activate', (event) => {

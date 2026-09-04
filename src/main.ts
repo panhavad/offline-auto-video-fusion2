@@ -1,4 +1,5 @@
 import { formatBytes, formatClock, formatDate, formatDuration, timestampSlug } from './lib/format';
+import { formatFrameRate, resolveFrameRate } from './lib/framerate';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type AppSettings } from './lib/settings';
 import type {
 	MergeItem,
@@ -58,13 +59,7 @@ const ui = {
 	titleColor: el<HTMLInputElement>('title-color'),
 	titleColorHex: el<HTMLInputElement>('title-color-hex'),
 	titleScale: el<HTMLInputElement>('title-scale'),
-	titleShadow: el<HTMLInputElement>('title-shadow'),
-	resolution: el<HTMLSelectElement>('resolution'),
 	frameRate: el<HTMLSelectElement>('frame-rate'),
-	quality: el<HTMLSelectElement>('quality'),
-	fit: el<HTMLSelectElement>('fit'),
-	includeAudio: el<HTMLInputElement>('include-audio'),
-	preferHardware: el<HTMLInputElement>('prefer-hardware'),
 	clipCount: el<HTMLSpanElement>('clip-count'),
 	sortKey: el<HTMLSelectElement>('sort-key'),
 	sortDir: el<HTMLButtonElement>('sort-dir'),
@@ -153,13 +148,7 @@ const applySettingsToForm = () => {
 	ui.titleColor.value = settings.titleColor;
 	ui.titleColorHex.value = settings.titleColor;
 	ui.titleScale.value = String(settings.titleScale);
-	ui.titleShadow.checked = settings.titleShadow;
-	ui.resolution.value = settings.resolution;
-	ui.frameRate.value = String(settings.frameRate);
-	ui.quality.value = settings.quality;
-	ui.fit.value = settings.fit;
-	ui.includeAudio.checked = settings.includeAudio;
-	ui.preferHardware.checked = settings.preferHardware;
+	ui.frameRate.value = settings.frameRate === 'auto' ? 'auto' : String(settings.frameRate);
 	ui.sortKey.value = settings.sortKey;
 	ui.recursive.checked = settings.recursive;
 	updateSortButton();
@@ -172,13 +161,8 @@ const readSettingsFromForm = () => {
 	settings.titlePosition = ui.titlePosition.value as AppSettings['titlePosition'];
 	settings.titleColor = ui.titleColor.value.toUpperCase();
 	settings.titleScale = Math.min(30, Math.max(2, Number(ui.titleScale.value) || DEFAULT_SETTINGS.titleScale));
-	settings.titleShadow = ui.titleShadow.checked;
-	settings.resolution = ui.resolution.value as AppSettings['resolution'];
-	settings.frameRate = Number(ui.frameRate.value) || DEFAULT_SETTINGS.frameRate;
-	settings.quality = ui.quality.value as AppSettings['quality'];
-	settings.fit = ui.fit.value as AppSettings['fit'];
-	settings.includeAudio = ui.includeAudio.checked;
-	settings.preferHardware = ui.preferHardware.checked;
+	settings.frameRate =
+		ui.frameRate.value === 'auto' ? 'auto' : Number(ui.frameRate.value) || DEFAULT_SETTINGS.frameRate;
 	settings.sortKey = ui.sortKey.value as SortKey;
 	settings.recursive = ui.recursive.checked;
 	saveSettings(settings);
@@ -379,9 +363,14 @@ const updateSummary = () => {
 			: 'No clip matches the current orientation filter.';
 	} else {
 		const trimmed = eligible.filter((entry) => settings.maxClipSeconds > 0 && (entry.probe?.duration ?? 0) > settings.maxClipSeconds).length;
+		const resolvedFps = resolveFrameRate(
+			settings.frameRate,
+			eligible.map((entry) => entry.probe?.frameRate ?? null),
+		);
 		ui.mergeSummary.textContent =
 			`${eligible.length} clip${eligible.length === 1 ? '' : 's'} · merged length ≈ ${formatDuration(totalSource)}` +
 			`${trimmed > 0 ? ` · ${trimmed} will be trimmed to ${settings.maxClipSeconds}s` : ''}` +
+			` · ${settings.frameRate === 'auto' ? `auto ${formatFrameRate(resolvedFps)}` : formatFrameRate(resolvedFps)}` +
 			`${probing ? ' · still reading metadata…' : ''}` +
 			` · order: ${settings.sortKey} ${settings.sortDirection === 'asc' ? '↑' : '↓'}`;
 	}
@@ -535,13 +524,7 @@ const setBusy = (busy: boolean) => {
 		ui.titleColor,
 		ui.titleColorHex,
 		ui.titleScale,
-		ui.titleShadow,
-		ui.resolution,
 		ui.frameRate,
-		ui.quality,
-		ui.fit,
-		ui.includeAudio,
-		ui.preferHardware,
 		ui.sortKey,
 		ui.sortDir,
 		ui.selectAll,
@@ -752,6 +735,7 @@ const startMerge = async () => {
 				name: entry.path,
 				file: entry.file,
 				plannedSeconds: plannedSeconds(entry),
+				sourceFrameRate: entry.probe?.frameRate ?? null,
 			};
 		});
 
@@ -795,7 +779,7 @@ function handleWorkerMessage(event: MessageEvent<WorkerOutMessage>) {
 			break;
 		case 'started':
 			addLog(
-				`Output: ${message.width}×${message.height}, video ${message.videoCodec.toUpperCase()}, audio ${message.audioCodec?.toUpperCase() ?? 'none'}.`,
+				`Output: ${message.width}×${message.height} @ ${formatFrameRate(message.frameRate)}, video ${message.videoCodec.toUpperCase()}, audio ${message.audioCodec?.toUpperCase() ?? 'none'}.`,
 			);
 			break;
 		case 'progress':
@@ -921,13 +905,7 @@ for (const control of [
 	ui.titleText,
 	ui.titlePosition,
 	ui.titleScale,
-	ui.titleShadow,
-	ui.resolution,
 	ui.frameRate,
-	ui.quality,
-	ui.fit,
-	ui.includeAudio,
-	ui.preferHardware,
 	ui.recursive,
 ]) {
 	control.addEventListener('change', () => {
@@ -1012,26 +990,137 @@ const reportCapabilities = () => {
 	}
 };
 
+type PrecacheProgress = {
+	type: 'precache-progress';
+	version: string;
+	state: 'idle' | 'caching' | 'ready' | 'incomplete';
+	done: number;
+	total: number;
+	failed: string[];
+};
+
+const setOfflineBadge = (text: string, variant: 'ok' | 'warn' | 'bad' | 'muted', title: string) => {
+	ui.offlineBadge.textContent = text;
+	ui.offlineBadge.className = `pill pill-${variant}`;
+	ui.offlineBadge.title = title;
+};
+
+/** Asks a worker for its precache snapshot, so a reload mid-install still shows progress. */
+const requestPrecacheStatus = (worker: ServiceWorker | null) =>
+	new Promise<PrecacheProgress | null>((resolve) => {
+		if (!worker) {
+			resolve(null);
+			return;
+		}
+		const channel = new MessageChannel();
+		const timer = setTimeout(() => resolve(null), 2000);
+		channel.port1.onmessage = (event) => {
+			clearTimeout(timer);
+			resolve((event.data as PrecacheProgress | undefined) ?? null);
+		};
+		worker.postMessage({ type: 'precache-status' }, [channel.port2]);
+	});
+
+/** Resolves once the registration has an active worker, or `failed` if install gave up. */
+const waitForActivation = (registration: ServiceWorkerRegistration) =>
+	new Promise<'active' | 'failed'>((resolve) => {
+		if (registration.active) {
+			resolve('active');
+			return;
+		}
+		const worker = registration.installing ?? registration.waiting;
+		if (!worker) {
+			void navigator.serviceWorker.ready.then(() => resolve('active'));
+			return;
+		}
+		const onChange = () => {
+			if (worker.state === 'activated') {
+				worker.removeEventListener('statechange', onChange);
+				resolve('active');
+			} else if (worker.state === 'redundant') {
+				worker.removeEventListener('statechange', onChange);
+				resolve('failed');
+			}
+		};
+		worker.addEventListener('statechange', onChange);
+		onChange();
+	});
+
 const registerServiceWorker = async () => {
 	if (!('serviceWorker' in navigator)) {
-		ui.offlineBadge.textContent = 'Offline: unavailable';
-		ui.offlineBadge.className = 'pill pill-warn';
+		setOfflineBadge('Offline: unavailable', 'warn', 'This browser has no service worker support.');
 		return;
 	}
 	if (import.meta.env.DEV) {
-		ui.offlineBadge.textContent = 'Offline: dev mode';
-		ui.offlineBadge.className = 'pill pill-muted';
+		setOfflineBadge('Offline: dev mode', 'muted', 'Offline caching is disabled during development.');
 		return;
 	}
 
-	ui.offlineBadge.textContent = 'Offline: caching…';
-	ui.offlineBadge.className = 'pill pill-muted';
+	setOfflineBadge('Offline: caching…', 'muted', 'Downloading the app so it keeps working without a network.');
+
+	let settled = false;
+	let loggedFailures = false;
+
+	const applyStatus = (data: PrecacheProgress) => {
+		if (data.state === 'caching') {
+			// Only report progress while nothing terminal has been shown, so a late burst of
+			// queued messages cannot drag the badge back from "ready" to a percentage.
+			if (settled) return;
+			const percent = data.total > 0 ? Math.floor((data.done / data.total) * 100) : 0;
+			setOfflineBadge(
+				`Offline: caching ${percent}%`,
+				'muted',
+				`Cached ${data.done} of ${data.total} files for offline use.`,
+			);
+			return;
+		}
+		if (data.state === 'ready') {
+			settled = true;
+			setOfflineBadge('Offline: ready', 'ok', `All ${data.total} files are cached. The app runs without a network.`);
+			return;
+		}
+		if (data.state === 'incomplete') {
+			settled = true;
+			const names = data.failed.map((url) => url.replace(/^\.\//, ''));
+			setOfflineBadge(
+				`Offline: incomplete (${data.failed.length})`,
+				'warn',
+				`These files could not be cached: ${names.join(', ')}`,
+			);
+			if (!loggedFailures) {
+				loggedFailures = true;
+				addLog(
+					`Offline caching finished with ${data.failed.length} of ${data.total} file(s) unavailable: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', …' : ''}. The server rejected or could not serve them — check file permissions on the deployment.`,
+					'warn',
+				);
+			}
+		}
+	};
+
+	navigator.serviceWorker.addEventListener('message', (event) => {
+		const data = event.data as PrecacheProgress | undefined;
+		if (!data || data.type !== 'precache-progress') return;
+		applyStatus(data);
+	});
 
 	try {
-		await navigator.serviceWorker.register('./sw.js', { scope: './' });
-		// `ready` resolves once a worker is active. Precaching happens atomically during install,
-		// but we still confirm that the exact URLs this page needs are reachable from the cache.
-		const registration = await navigator.serviceWorker.ready;
+		const registration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+		if ((await waitForActivation(registration)) === 'failed') {
+			setOfflineBadge('Offline: failed', 'warn', 'The service worker could not be installed.');
+			addLog('The offline service worker failed to install, so the app will need the server on every load.', 'warn');
+			return;
+		}
+		if (settled) return;
+
+		// No progress broadcast arrived: the worker was already installed on an earlier visit and
+		// may have been restarted since, losing its in-memory snapshot. Ask it, then fall back to
+		// checking that the URLs this page actually needs are reachable from the cache.
+		const reported = await requestPrecacheStatus(registration.active ?? navigator.serviceWorker.controller);
+		if (reported?.type === 'precache-progress' && (reported.state === 'ready' || reported.state === 'incomplete')) {
+			applyStatus(reported);
+			return;
+		}
+
 		const assets = [
 			location.href,
 			...Array.from(document.querySelectorAll<HTMLScriptElement>('script[src]')).map((node) => node.src),
@@ -1039,15 +1128,12 @@ const registerServiceWorker = async () => {
 		];
 		const hits = await Promise.all(assets.map((url) => caches.match(url, { ignoreVary: true })));
 		if (registration.active && hits.every(Boolean)) {
-			ui.offlineBadge.textContent = 'Offline: ready';
-			ui.offlineBadge.className = 'pill pill-ok';
+			setOfflineBadge('Offline: ready', 'ok', 'The app is cached and runs without a network.');
 		} else {
-			ui.offlineBadge.textContent = 'Offline: incomplete';
-			ui.offlineBadge.className = 'pill pill-warn';
+			setOfflineBadge('Offline: incomplete', 'warn', 'Some files are missing from the offline cache.');
 		}
 	} catch {
-		ui.offlineBadge.textContent = 'Offline: unavailable';
-		ui.offlineBadge.className = 'pill pill-warn';
+		setOfflineBadge('Offline: unavailable', 'warn', 'The service worker could not be registered.');
 	}
 };
 

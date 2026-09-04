@@ -17,6 +17,8 @@ export type SortKey = 'name' | 'modified' | 'created';
 export type SortDirection = 'asc' | 'desc';
 export type ResolutionPreset = 'auto' | '2160' | '1440' | '1080' | '720' | '480';
 export type QualityPreset = 'high' | 'medium' | 'low';
+/** `auto` derives the cap from the selected clips; a number is an explicit upper limit in fps. */
+export type FrameRateSetting = number | 'auto';
 
 export interface ProbeResult {
 	ok: boolean;
@@ -45,7 +47,7 @@ export interface MergeSettings {
 	fit: FitMode;
 	resolution: ResolutionPreset;
 	quality: QualityPreset;
-	frameRate: number;
+	frameRate: FrameRateSetting;
 	includeAudio: boolean;
 	preferHardware: boolean;
 }
@@ -56,6 +58,8 @@ export interface MergeItem {
 	file: File;
 	/** Trimmed duration in seconds, estimated while probing. Used for progress reporting. */
 	plannedSeconds: number;
+	/** Frame rate measured while probing, or null when it could not be determined. */
+	sourceFrameRate: number | null;
 }
 
 export type MergeTarget =
@@ -91,7 +95,7 @@ export interface MergeProgress {
 export type WorkerOutMessage =
 	| { type: 'probed'; id: string; result: ProbeResult }
 	| { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
-	| { type: 'started'; videoCodec: string; audioCodec: string | null; width: number; height: number }
+	| { type: 'started'; videoCodec: string; audioCodec: string | null; width: number; height: number; frameRate: number }
 	| { type: 'progress'; progress: MergeProgress }
 	| { type: 'item-done'; id: string; encodedSeconds: number }
 	| { type: 'item-failed'; id: string; error: string }

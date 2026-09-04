@@ -40,6 +40,7 @@ import type {
 	WorkerOutMessage,
 } from '../types';
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, AudioNormalizer } from '../lib/audio';
+import { formatFrameRate, resolveFrameRate } from '../lib/framerate';
 
 const SILENCE_CHUNK_SECONDS = 0.5;
 const PROGRESS_INTERVAL_MS = 200;
@@ -359,6 +360,7 @@ async function runMerge(request: MergeRequest): Promise<void> {
 
 		const overlay = renderTitle(settings, width, height);
 		const quality = qualityFor(settings.quality);
+		const frameRate = resolveFrameRate(settings.frameRate, items.map((item) => item.sourceFrameRate));
 		const { codec: videoCodec, hardware } = await pickVideoCodec(width, height, quality, settings.preferHardware);
 
 		let audioCodec: AudioCodec | null = null;
@@ -401,15 +403,27 @@ async function runMerge(request: MergeRequest): Promise<void> {
 		if (audioSource) output.addAudioTrack(audioSource);
 
 		await output.start();
-		post({ type: 'started', videoCodec, audioCodec, width, height });
+		post({ type: 'started', videoCodec, audioCodec, width, height, frameRate });
 		log(
-			`Encoding ${width}x${height} using ${videoCodec.toUpperCase()}` +
+			`Encoding ${width}x${height} at up to ${formatFrameRate(frameRate)} using ${videoCodec.toUpperCase()}` +
 				`${hardware === 'prefer-hardware' ? ' (hardware accelerated)' : ''}` +
 				`${audioCodec ? ` + ${audioCodec.toUpperCase()} audio` : ' (no audio)'}.`,
 		);
+		if (settings.frameRate === 'auto') {
+			const detected = items.some((item) => typeof item.sourceFrameRate === 'number' && item.sourceFrameRate > 0);
+			log(
+				detected
+					? `Frame rate follows the fastest source clip: ${formatFrameRate(frameRate)}.`
+					: `Source frame rate could not be detected; using the ${formatFrameRate(frameRate)} upper limit.`,
+				detected ? 'info' : 'warn',
+			);
+		}
 
 		const totalSeconds = items.reduce((sum, item) => sum + item.plannedSeconds, 0);
-		const frameInterval = 1 / settings.frameRate;
+		const frameInterval = 1 / frameRate;
+		// In auto mode the cap comes from the footage itself, so the usual hairline tolerance is
+		// widened: timestamp jitter in a nominally constant-rate source must not cost frames.
+		const minFrameSpacing = settings.frameRate === 'auto' ? frameInterval * 0.9 : frameInterval - 1e-4;
 
 		let timelineCursor = 0;
 		let audioCursor = 0;
@@ -514,7 +528,7 @@ async function runMerge(request: MergeRequest): Promise<void> {
 								break;
 							}
 							const relative = sample.timestamp - firstTimestamp;
-							if (!isFirstFrame && relative - lastRelative < frameInterval - 1e-4) {
+							if (!isFirstFrame && relative - lastRelative < minFrameSpacing) {
 								sample.close();
 								continue;
 							}

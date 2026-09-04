@@ -114,13 +114,12 @@ instead.
 | --- | --- |
 | Orientation | Only clips matching *landscape* / *portrait* are merged (*any* disables the filter). Skipped clips still show up in the list. |
 | Max length per clip | Longer clips are trimmed to this many seconds; `0` keeps the full length. |
-| Title text / position / color / size / shadow | Text burned into every frame, at one of 9 positions. `\n` starts a second line. |
-| Output resolution | *Auto* follows the first clip (capped at 1080p), or force 480p…2160p. |
-| Frame rate | Upper limit — source frames are never duplicated to reach it. |
-| Quality | Bitrate preset (high / medium / low). |
-| Scaling | *Contain* letterboxes, *Cover* fills and crops the edges. |
-| Keep audio | Re-encodes audio to AAC/Opus 48 kHz stereo, or drops it entirely. |
-| Prefer GPU encoding | Requests a hardware encoder; falls back to software automatically. |
+| Title text / position / color / size | Text burned into every frame, at one of 9 positions. `\n` starts a second line. |
+| Frame rate | Upper limit — source frames are never duplicated to reach it. *Auto* (default) matches the fastest selected clip, or falls back to a 120 fps limit when no source rate can be detected. |
+
+Output resolution, quality, scaling, title shadow, and audio use their optimized defaults. Processing
+always requests GPU encoding and falls back to software automatically when hardware encoding is not
+available.
 
 **3 · Review the clips.** Each clip is probed in a worker: resolution, orientation, duration, dates
 and a decoded thumbnail. Sort by name, modified or created date (ascending/descending) — **the list
@@ -184,6 +183,12 @@ Other notes:
   `docker run --read-only --tmpfs /var/cache/nginx --tmpfs /var/run -p 8080:80 auto-video-fusion`.
 - **Static hosting** (GitHub Pages, S3, Netlify, …): upload `dist/` and make sure `sw.js` is not
   cached aggressively.
+- **File permissions.** Everything under `public/` is copied into `dist/` with the permissions it
+  had in the checkout, so a clone made with a restrictive umask (common on NAS boxes) can leave
+  `manifest.webmanifest` and the icons unreadable for the unprivileged nginx worker — it answers
+  `403` and the offline badge reports `Offline: incomplete`. The `runtime` image normalises the
+  modes itself; when copying `dist/` somewhere by hand, do the same:
+  `chmod -R a=rX,u+w dist`.
 
 ## What it does
 
@@ -242,7 +247,20 @@ service worker that precaches all of them. Load the page once over HTTP(S); afte
 the worker bundle and the codec logic are served from the cache. Verified by shutting the server
 down completely and merging clips with the page still open (and after a reload).
 
-The offline badge in the header shows whether the service worker is active.
+Entries are stored one at a time instead of with `cache.addAll`, which is atomic: a single asset the
+server refuses to serve would otherwise abort the whole install and leave the page with no worker at
+all. The worker reports its progress to the page, so the badge in the header shows what is going on:
+
+| Badge | Meaning |
+| --- | --- |
+| `Offline: caching 42%` | precache in progress — the tooltip gives the exact file count |
+| `Offline: ready` | every file is cached; the app runs with no network |
+| `Offline: incomplete (n)` | the worker is active but `n` files could not be fetched; the tooltip and the log name them |
+| `Offline: failed` | the worker could not be installed at all |
+| `Offline: dev mode` | caching is disabled under `npm run dev` |
+
+An `Offline: incomplete` badge almost always means the server rejected those files — see the file
+permissions note under [Deployment](#deployment).
 
 ## Browser support
 
