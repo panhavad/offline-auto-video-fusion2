@@ -3,6 +3,9 @@ dist
 .git
 .gitignore
 *.local
+.env
+.env.*
+!.env.example
 .DS_Store
 test media
 docs/screenshots

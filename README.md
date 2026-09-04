@@ -24,13 +24,31 @@ The app is a static bundle: the image builds it with Node and serves it with ngi
 backend and no database — the container only hands out HTML, CSS, JS and the service worker.
 
 ```bash
+cp .env.example .env              # ports live here; .env is git-ignored
 docker compose up -d --build      # build the bundle and serve it
-# open http://localhost:8080
+# open http://localhost:8080      (or whatever APP_PORT you set)
 docker compose logs -f app        # follow nginx logs
 docker compose down               # stop and remove the container
 ```
 
-Change the published port with `APP_PORT` (a `.env` file next to `docker-compose.yml` works too):
+On Windows: `Copy-Item .env.example .env`.
+
+### Ports are configured in `.env`
+
+All ports come from environment variables, so changing them is a local-only edit that can never be
+pushed by accident. [`.env.example`](.env.example) is the tracked template; `.env` is ignored by
+both git and Docker.
+
+| Variable | Default | Used by |
+| --- | --- | --- |
+| `APP_PORT` | `8080` | host port of the nginx container (`docker compose up app`) |
+| `DEV_PORT` | `5173` | Vite dev server — the `dev` compose service *and* `npm run dev` |
+| `PREVIEW_PORT` | `4173` | `npm run preview` |
+
+Every variable has a fallback baked into [`docker-compose.yml`](docker-compose.yml) and
+[`vite.config.ts`](vite.config.ts), so the project still runs when `.env` is missing — a fresh
+clone works before anything is copied. Shell variables take precedence over the file, which is
+handy for a one-off run or for CI:
 
 ```bash
 APP_PORT=3000 docker compose up -d --build     # http://localhost:3000
@@ -39,20 +57,21 @@ APP_PORT=3000 docker compose up -d --build     # http://localhost:3000
 ### Development container (hot reload)
 
 ```bash
-docker compose --profile dev up dev            # Vite dev server on http://localhost:5173
+docker compose --profile dev up dev            # Vite dev server on http://localhost:$DEV_PORT
 ```
 
 The `dev` service bind-mounts the repository into the container, so edits on the host reload
 instantly. `node_modules` stays inside the container (an anonymous volume shadows the host copy),
-so a Windows/macOS host never leaks incompatible native binaries into the Linux image. Override the
-port with `DEV_PORT`.
+so a Windows/macOS host never leaks incompatible native binaries into the Linux image. `DEV_PORT` is
+passed into the container and used on both sides of the mapping, so the URL Vite prints is the one
+that works from the host.
 
 ### What is in the image
 
 | Stage | Base | Purpose |
 | --- | --- | --- |
 | `deps` | `node:22-alpine` | `npm ci` once, reused by the other stages |
-| `dev` | `node:22-alpine` | Vite dev server, port 5173 |
+| `dev` | `node:22-alpine` | Vite dev server, port from `DEV_PORT` |
 | `build` | `node:22-alpine` | `npm run build` → `dist/` incl. the generated service worker |
 | `runtime` | `nginx:1.27-alpine` | serves `dist/` on port 80, has a `HEALTHCHECK` |
 
@@ -60,7 +79,8 @@ The nginx config lives in [`docker/nginx.conf`](docker/nginx.conf). It caches `/
 hashed by Vite) for a year, forbids caching of `sw.js` and `index.html` so a new deploy is picked up
 on the next reload, serves `manifest.webmanifest` with the right MIME type and gzips text assets.
 
-Build or run the image without Compose:
+The container always listens on port 80 internally — only the published port is configurable — so
+building or running the image without Compose stays straightforward:
 
 ```bash
 docker build -t auto-video-fusion .
@@ -71,11 +91,12 @@ docker run --rm -p 8080:80 auto-video-fusion
 
 ```
 npm install
-npm run build     # bundles the app + generates the offline service worker
-npm run preview   # serve dist/ at http://localhost:4173
+cp .env.example .env   # optional: only needed to change ports
+npm run build          # bundles the app + generates the offline service worker
+npm run preview        # serve dist/ at http://localhost:4173 ($PREVIEW_PORT)
 ```
 
-For development: `npm run dev` (http://localhost:5173) and `npm run typecheck`.
+For development: `npm run dev` (http://localhost:5173, or `$DEV_PORT`) and `npm run typecheck`.
 
 ## Using the app
 
@@ -130,8 +151,9 @@ The build output in `dist/` is fully static — any web server or object storage
 above is only a convenient, reproducible way to do it.
 
 **Serve it from a secure context.** WebCodecs and the File System Access API are only available on
-`https://` or on `http://localhost`. Testing on `http://localhost:8080` is fine; exposing the
-container on a LAN IP over plain HTTP is not — put a TLS-terminating reverse proxy in front of it:
+`https://` or on `http://localhost`. Testing on `http://localhost:$APP_PORT` is fine; exposing the
+container on a LAN IP over plain HTTP is not — put a TLS-terminating reverse proxy in front of it
+(`8080` below is the `APP_PORT` from your `.env`):
 
 ```nginx
 server {
@@ -152,6 +174,8 @@ Other notes:
 
 - **Subfolders work.** Vite is configured with `base: './'`, so the bundle can be served from
   `https://example.com/tools/fusion/` without a rebuild.
+- **Ports are per-machine.** Set `APP_PORT` in `.env` (git-ignored) or in the deploy environment;
+  nothing about the host is baked into a tracked file.
 - **Deploying a new version** only requires replacing the container or the files. `sw.js` and
   `index.html` are served with `no-cache`, so the next reload installs the new precache and drops
   the old one.
@@ -241,8 +265,10 @@ src/lib/audio.ts               normalizes any channel layout / sample rate to 48
 src/lib/                       formatting helpers and persisted settings
 src/dev/test-media.ts          dev-only fixture generator (not part of the bundle)
 scripts/build-sw.mjs           generates dist/sw.js with the precache manifest
+scripts/build-icons.mjs        regenerates public/favicon.ico and the PNG icons from icon.svg (`npm run icons`)
 Dockerfile                     deps → dev / build → nginx runtime
-docker-compose.yml             `app` (nginx, :8080) and `dev` (Vite, :5173) services
+docker-compose.yml             `app` (nginx) and `dev` (Vite) services, ports from .env
+.env.example                   port template — copy to .env (git-ignored)
 docker/nginx.conf              static serving, caching and gzip rules
 docs/screenshots/              images used by this README
 ```

@@ -10,6 +10,8 @@ RUN npm ci
 
 # ---------------------------------------------------------------------------
 # dev - Vite dev server with hot reload (sources are bind-mounted by compose).
+# The listening port comes from DEV_PORT (see .env.example); 5173 is the default
+# that vite.config.ts falls back to, so EXPOSE documents that same default.
 # ---------------------------------------------------------------------------
 FROM node:22-alpine AS dev
 WORKDIR /app

@@ -1,8 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Offline Auto Video Fusion">
-	<rect width="512" height="512" fill="#000000" />
-	<rect x="48" y="120" width="180" height="272" fill="none" stroke="#ffffff" stroke-width="20" />
-	<rect x="284" y="120" width="180" height="272" fill="none" stroke="#ffffff" stroke-width="20" />
-	<path d="M228 256h56" stroke="#1f9d55" stroke-width="24" stroke-linecap="round" />
-	<path d="M196 214l40 42-40 42" fill="none" stroke="#1f9d55" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" />
-	<path d="M316 214l-40 42 40 42" fill="none" stroke="#1f9d55" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" />
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Offline Auto Video Fusion">
+	<rect width="512" height="512" rx="96" fill="#18211e" />
+	<rect x="48" y="140" width="152" height="232" rx="28" fill="#ffffff" />
+	<rect x="312" y="140" width="152" height="232" rx="28" fill="#ffffff" />
+	<path d="M216 256h80" fill="none" stroke="#1f9d55" stroke-width="44" stroke-linecap="round" />
 </svg>

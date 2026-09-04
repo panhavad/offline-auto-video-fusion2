@@ -1,5 +1,7 @@
+# Ports come from .env (copy .env.example to .env). The defaults below only
+# apply when a variable is missing, so the file stays usable without one.
 services:
-  # Production-like static build served by nginx: http://localhost:8080
+  # Production-like static build served by nginx: http://localhost:${APP_PORT}
   app:
     build:
       context: .
@@ -18,12 +20,15 @@ services:
     image: auto-video-fusion-dev:latest
     container_name: auto-video-fusion-dev
     profiles: ["dev"]
+    # Host and container side stay identical so the URL Vite prints is the one
+    # that actually works from the host.
     ports:
-      - "${DEV_PORT:-5173}:5173"
+      - "${DEV_PORT:-5173}:${DEV_PORT:-5173}"
     volumes:
       - .:/app
       # Keep the image's node_modules (built for Linux) instead of the host's.
       - /app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
+      - DEV_PORT=${DEV_PORT:-5173}
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
