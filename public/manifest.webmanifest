@@ -1,0 +1,18 @@
+{
+	"name": "Offline Auto Video Fusion",
+	"short_name": "Offline Fusion",
+	"description": "Merge every video in a local folder into a single file, entirely on your own device.",
+	"start_url": "./",
+	"scope": "./",
+	"display": "standalone",
+	"background_color": "#18211e",
+	"theme_color": "#18211e",
+	"icons": [
+		{
+			"src": "icon.svg",
+			"sizes": "any",
+			"type": "image/svg+xml",
+			"purpose": "any"
+		}
+	]
+}

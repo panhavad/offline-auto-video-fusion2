@@ -1,0 +1,21 @@
+{
+	"name": "auto-video-fusion",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Client-side video folder merger: picks a local directory, merges all matching videos into a single MP4 with WebCodecs. Works offline.",
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build && node scripts/build-sw.mjs",
+		"preview": "vite preview",
+		"typecheck": "tsc --noEmit",
+		"test": "tsc --noEmit"
+	},
+	"dependencies": {
+		"mediabunny": "^1.55.3"
+	},
+	"devDependencies": {
+		"typescript": "^5.9.3",
+		"vite": "^7.3.6"
+	}
+}

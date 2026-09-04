@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Offline Auto Video Fusion</title>
+		<meta name="description" content="Merge every video in a local folder into one file. Runs entirely in your browser - offline, nothing is uploaded." />
+		<meta id="theme-color" name="theme-color" content="#18211e" />
+		<link rel="manifest" href="manifest.webmanifest" />
+		<link rel="icon" href="icon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/src/styles.css" />
+	</head>
+	<body>
+		<header class="topbar">
+			<div class="brand">
+				<span class="logo">▣</span>
+				<div>
+					<h1>Offline Auto Video Fusion</h1>
+					<p class="tagline">Merge a whole folder of videos into one file — 100% on your device.</p>
+				</div>
+			</div>
+			<div class="badges">
+				<button id="theme-toggle" class="btn btn-white theme-toggle" type="button" aria-pressed="false">Dark mode</button>
+				<span id="offline-badge" class="pill pill-muted" title="Offline availability">Offline: checking…</span>
+				<span id="support-badge" class="pill pill-muted hidden" title="Browser capabilities"></span>
+			</div>
+		</header>
+
+		<main>
+			<div class="setup-grid">
+				<section class="panel" id="panel-source">
+					<h2><span class="step">1</span> Source folder</h2>
+					<div class="row">
+						<button id="pick-folder" class="btn btn-green">Choose folder</button>
+						<button id="rescan" class="btn btn-white" disabled>Rescan</button>
+						<label class="check">
+							<input type="checkbox" id="recursive" />
+							<span><span class="control-icon" aria-hidden="true">↳</span>Include subfolders</span>
+						</label>
+					</div>
+					<p id="folder-info" class="muted">No folder selected. Files are read directly from disk and never uploaded.</p>
+					<div id="fallback-wrap" class="row hidden">
+						<label class="btn btn-white file-btn">
+							<span class="control-icon" aria-hidden="true">▤</span>Choose folder (fallback)
+							<input type="file" id="folder-input" multiple accept="video/*" />
+						</label>
+						<span class="muted small">This browser has no File System Access API, so the merged file will be offered as a download instead of being written into the folder.</span>
+					</div>
+				</section>
+
+				<section class="panel" id="panel-settings">
+					<h2><span class="step">2</span> Settings</h2>
+					<div class="settings-grid">
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">◫</span>Orientation</span>
+						<select id="orientation">
+							<option value="landscape">Landscape only</option>
+							<option value="portrait">Portrait only</option>
+							<option value="any">Any orientation</option>
+						</select>
+						<small>Clips that do not match are ignored.</small>
+					</label>
+
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">◷</span>Max length per clip (s)</span>
+						<input type="number" id="max-clip" min="0" max="3600" step="1" />
+						<small>Longer clips are trimmed. 0 = keep full length.</small>
+					</label>
+
+					<label class="field field-wide">
+						<span class="field-label"><span class="control-icon control-icon-text" aria-hidden="true">T</span>Title text</span>
+						<input type="text" id="title-text" placeholder="Shown on every frame (leave empty for none)" />
+						<small>Use Shift+Enter style line breaks by typing \n for a second line.</small>
+					</label>
+
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">⌖</span>Title position</span>
+						<select id="title-position">
+							<option value="top-left">Top left</option>
+							<option value="top-center">Top center</option>
+							<option value="top-right">Top right</option>
+							<option value="middle-left">Middle left</option>
+							<option value="middle-center">Middle center</option>
+							<option value="middle-right">Middle right</option>
+							<option value="bottom-left">Bottom left</option>
+							<option value="bottom-center">Bottom center</option>
+							<option value="bottom-right">Bottom right</option>
+						</select>
+					</label>
+
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">●</span>Title color</span>
+						<span class="color-row">
+							<input type="color" id="title-color" aria-label="Title color picker" />
+							<input type="text" id="title-color-hex" spellcheck="false" aria-label="Title color hex value" />
+						</span>
+						<small>Default white.</small>
+					</label>
+
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">↕</span>Title size (% of height)</span>
+						<input type="number" id="title-scale" min="2" max="30" step="0.5" />
+					</label>
+
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">▣</span>Output resolution</span>
+						<select id="resolution">
+							<option value="auto">Auto (first clip, max 1080p)</option>
+							<option value="2160">2160p (4K)</option>
+							<option value="1440">1440p</option>
+							<option value="1080">1080p</option>
+							<option value="720">720p</option>
+							<option value="480">480p</option>
+						</select>
+					</label>
+
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">◴</span>Frame rate</span>
+						<select id="frame-rate">
+							<option value="24">24 fps</option>
+							<option value="25">25 fps</option>
+							<option value="30">30 fps</option>
+							<option value="50">50 fps</option>
+							<option value="60">60 fps</option>
+						</select>
+						<small>Upper limit; source frames are never duplicated.</small>
+					</label>
+
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">◆</span>Quality</span>
+						<select id="quality">
+							<option value="high">High</option>
+							<option value="medium">Medium</option>
+							<option value="low">Low</option>
+						</select>
+					</label>
+
+					<label class="field">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">⤢</span>Scaling</span>
+						<select id="fit">
+							<option value="contain">Contain (letterbox, no crop)</option>
+							<option value="cover">Cover (fill, crops edges)</option>
+						</select>
+					</label>
+
+					<div class="field toggles">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">⚙</span>Processing</span>
+						<label class="check"><input type="checkbox" id="title-shadow" /><span><span class="control-icon" aria-hidden="true">◐</span>Title shadow</span></label>
+						<label class="check"><input type="checkbox" id="include-audio" /><span><span class="control-icon" aria-hidden="true">♪</span>Keep audio</span></label>
+						<label class="check"><input type="checkbox" id="prefer-hardware" /><span><span class="control-icon" aria-hidden="true">⚡</span>Prefer GPU encoding</span></label>
+					</div>
+					</div>
+				</section>
+			</div>
+
+			<section class="panel" id="panel-clips">
+				<h2><span class="step">3</span> Clips <span id="clip-count" class="pill pill-muted">0</span></h2>
+				<div class="row">
+					<label class="field inline">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">⇅</span>Sort by</span>
+						<select id="sort-key">
+							<option value="name">Name</option>
+							<option value="modified">Modified date</option>
+							<option value="created">Created date</option>
+						</select>
+					</label>
+					<button id="sort-dir" class="btn btn-white" title="Toggle sort direction">Ascending ↑</button>
+					<button id="select-all" class="btn btn-white">Select all</button>
+					<button id="select-none" class="btn btn-white">Select none</button>
+					<span id="probe-status" class="muted small"></span>
+				</div>
+				<div class="table-wrap">
+					<table id="clip-table">
+						<thead>
+							<tr>
+								<th class="col-check"><span class="sr-only">Include</span></th>
+								<th class="col-order">#</th>
+								<th class="col-thumb">Preview</th>
+								<th>Name</th>
+								<th>Size</th>
+								<th>Resolution</th>
+								<th>Orientation</th>
+								<th>Length</th>
+								<th>Created</th>
+								<th>Modified</th>
+								<th>Status</th>
+							</tr>
+						</thead>
+						<tbody id="clip-rows"></tbody>
+					</table>
+					<p id="clip-empty" class="muted empty-note">Choose a folder to list its videos.</p>
+				</div>
+			</section>
+
+			<section class="panel" id="panel-merge">
+				<h2><span class="step">4</span> Merge</h2>
+				<p id="merge-summary" class="muted">Nothing to merge yet.</p>
+				<div class="row">
+					<button id="start" class="btn btn-green" disabled>Start merge</button>
+					<button id="cancel" class="btn btn-red hidden">Cancel</button>
+					<a id="open-output" class="btn btn-green hidden" target="_blank" rel="noopener">Open output</a>
+					<a id="download" class="btn btn-orange hidden" download>Download result</a>
+				</div>
+
+				<div id="progress-wrap" class="progress-wrap hidden">
+					<div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+					<div class="progress-meta">
+						<span id="progress-percent">0%</span>
+						<span id="progress-current"></span>
+						<span id="progress-eta"></span>
+					</div>
+					<div class="stats">
+						<div><span class="stat-label">Elapsed</span><span id="stat-elapsed">0s</span></div>
+						<div><span class="stat-label">Remaining</span><span id="stat-eta">—</span></div>
+						<div><span class="stat-label">Encoded</span><span id="stat-encoded">0s / 0s</span></div>
+						<div><span class="stat-label">Speed</span><span id="stat-fps">0 fps</span></div>
+						<div><span class="stat-label">Output size</span><span id="stat-bytes">0 B</span></div>
+						<div><span class="stat-label">Clip</span><span id="stat-clip">0 / 0</span></div>
+					</div>
+				</div>
+
+				<div id="log" class="log" aria-live="polite"></div>
+			</section>
+		</main>
+
+		<footer>
+			<span>Everything runs locally with WebCodecs. Nothing leaves your machine.</span>
+		</footer>
+
+		<script type="module" src="/src/main.ts"></script>
+	</body>
+</html>

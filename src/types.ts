@@ -1,0 +1,100 @@
+export type Orientation = 'landscape' | 'portrait' | 'any';
+export type ClipOrientation = 'landscape' | 'portrait' | 'square';
+
+export type TitlePosition =
+	| 'top-left'
+	| 'top-center'
+	| 'top-right'
+	| 'middle-left'
+	| 'middle-center'
+	| 'middle-right'
+	| 'bottom-left'
+	| 'bottom-center'
+	| 'bottom-right';
+
+export type FitMode = 'contain' | 'cover';
+export type SortKey = 'name' | 'modified' | 'created';
+export type SortDirection = 'asc' | 'desc';
+export type ResolutionPreset = 'auto' | '2160' | '1440' | '1080' | '720' | '480';
+export type QualityPreset = 'high' | 'medium' | 'low';
+
+export interface ProbeResult {
+	ok: boolean;
+	error?: string;
+	width: number;
+	height: number;
+	rotation: number;
+	duration: number;
+	orientation: ClipOrientation;
+	frameRate: number | null;
+	hasAudio: boolean;
+	codec: string | null;
+	createdAt: number | null;
+	/** Small JPEG preview of an early frame, or null when no frame could be decoded. */
+	thumbnail: Blob | null;
+}
+
+export interface MergeSettings {
+	orientation: Orientation;
+	maxClipSeconds: number;
+	title: string;
+	titlePosition: TitlePosition;
+	titleColor: string;
+	titleScale: number;
+	titleShadow: boolean;
+	fit: FitMode;
+	resolution: ResolutionPreset;
+	quality: QualityPreset;
+	frameRate: number;
+	includeAudio: boolean;
+	preferHardware: boolean;
+}
+
+export interface MergeItem {
+	id: string;
+	name: string;
+	file: File;
+	/** Trimmed duration in seconds, estimated while probing. Used for progress reporting. */
+	plannedSeconds: number;
+}
+
+export type MergeTarget =
+	| { kind: 'file'; handle: FileSystemFileHandle }
+	| { kind: 'buffer' };
+
+export interface MergeRequest {
+	items: MergeItem[];
+	settings: MergeSettings;
+	target: MergeTarget;
+}
+
+export type WorkerInMessage =
+	| { type: 'probe'; id: string; file: File }
+	| { type: 'merge'; request: MergeRequest }
+	| { type: 'cancel' };
+
+export interface MergeProgress {
+	/** Seconds of source material already encoded. */
+	processedSeconds: number;
+	/** Total seconds of source material to encode. */
+	totalSeconds: number;
+	currentIndex: number;
+	totalItems: number;
+	currentName: string;
+	framesEncoded: number;
+	fps: number;
+	bytesWritten: number;
+	elapsedMs: number;
+	etaMs: number | null;
+}
+
+export type WorkerOutMessage =
+	| { type: 'probed'; id: string; result: ProbeResult }
+	| { type: 'log'; level: 'info' | 'warn' | 'error'; message: string }
+	| { type: 'started'; videoCodec: string; audioCodec: string | null; width: number; height: number }
+	| { type: 'progress'; progress: MergeProgress }
+	| { type: 'item-done'; id: string; encodedSeconds: number }
+	| { type: 'item-failed'; id: string; error: string }
+	| { type: 'done'; buffer: ArrayBuffer | null; bytes: number; durationSeconds: number; elapsedMs: number }
+	| { type: 'canceled' }
+	| { type: 'error'; message: string };

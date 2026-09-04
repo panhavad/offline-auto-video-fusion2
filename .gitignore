@@ -1,0 +1,35 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local media and generated video files
+test media/
+*.mp4
+*.mov
+*.webm
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and temporary files
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tmp
+*.temp
+.cache/
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
