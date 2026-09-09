@@ -16,7 +16,16 @@ export type FitMode = 'contain' | 'cover';
 export type SortKey = 'name' | 'modified' | 'created';
 export type SortDirection = 'asc' | 'desc';
 export type ResolutionPreset = 'auto' | '2160' | '1440' | '1080' | '720' | '480';
+/** `auto` keeps the first clip's shape; every other value forces a width:height ratio. */
+export type AspectRatioSetting = 'auto' | '16:9' | '9:16' | '4:3' | '3:4' | '1:1' | '4:5' | '21:9';
 export type QualityPreset = 'high' | 'medium' | 'low';
+/** Strength of the software (optical-flow) stabilizer; `off` skips the analysis pass entirely. */
+export type StabilizerSetting = 'off' | 'light' | 'standard' | 'strong';
+/**
+ * How much of the machine the merge pipeline may use. `auto` scales with the detected CPU/GPU,
+ * `max` pushes every core into the pipeline, and `safe` falls back to the single-threaded pipeline.
+ */
+export type AccelerationMode = 'auto' | 'max' | 'balanced' | 'safe';
 /** `auto` derives the cap from the selected clips; a number is an explicit upper limit in fps. */
 export type FrameRateSetting = number | 'auto';
 
@@ -46,10 +55,13 @@ export interface MergeSettings {
 	titleShadow: boolean;
 	fit: FitMode;
 	resolution: ResolutionPreset;
+	aspectRatio: AspectRatioSetting;
 	quality: QualityPreset;
 	frameRate: FrameRateSetting;
+	stabilize: StabilizerSetting;
 	includeAudio: boolean;
 	preferHardware: boolean;
+	accelerationMode: AccelerationMode;
 }
 
 export interface MergeItem {

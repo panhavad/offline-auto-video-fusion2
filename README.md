@@ -14,6 +14,7 @@ even when the server is gone.
 - [Deployment](#deployment)
 - [What it does](#what-it-does)
 - [How it stays fast and light on memory](#how-it-stays-fast-and-light-on-memory)
+- [Stabilization](#stabilization)
 - [Offline](#offline)
 - [Browser support](#browser-support)
 - [Project layout](#project-layout)
@@ -114,12 +115,22 @@ instead.
 | --- | --- |
 | Orientation | Only clips matching *landscape* / *portrait* are merged (*any* disables the filter). Skipped clips still show up in the list. |
 | Max length per clip | Longer clips are trimmed to this many seconds; `0` keeps the full length. |
+| Resolution | *Auto* (default) keeps the first clip's size. A preset rescales the frame so its short edge is 2160/1440/1080/720/480. |
+| Aspect ratio | *Auto* (default) keeps the first clip's shape. Pick 16:9, 9:16, 4:3, 3:4, 1:1, 4:5 or 21:9 to force a different frame. |
 | Title text / position / color / size | Text burned into every frame, at one of 9 positions. `\n` starts a second line. |
 | Frame rate | Upper limit — source frames are never duplicated to reach it. *Auto* (default) matches the fastest selected clip, or falls back to a 120 fps limit when no source rate can be detected. |
+| Stabilizer | Software stabilization applied automatically to **every** clip. *Off* (default) skips it entirely; *Light* / *Standard* / *Strong* trade an increasing crop for an increasingly steady picture. See [Stabilization](#stabilization). |
+| Acceleration | How much of the machine the merge may use. *Auto* (default) sizes the pipeline from the detected GPU, core count and memory; *Maximum* pushes further on a workstation; *Balanced* leaves headroom for other work; *Compatibility* falls back to the strictly sequential pipeline. The detected GPU is written to the log when the app starts. |
 
-Output resolution, quality, scaling, title shadow, and audio use their optimized defaults. Processing
-always requests GPU encoding and falls back to software automatically when hardware encoding is not
-available.
+With both frame controls on *auto* the output is exactly the first clip's frame, and clips of a
+different shape are letterboxed into it. As soon as either one is set, the frame is forced and
+**every clip that does not fit it is cropped to fill** instead. The two controls are independent:
+the ratio picks the shape and the resolution picks the size, so forcing only the ratio keeps the
+first clip's short edge and therefore its level of detail. If the encoder cannot handle the
+requested size, the frame is scaled down automatically and a warning is logged.
+
+Quality, title shadow, and audio use their optimized defaults. Processing always requests GPU
+encoding and falls back to software automatically when hardware encoding is not available.
 
 **3 · Review the clips.** Each clip is probed in a worker: resolution, orientation, duration, dates
 and a decoded thumbnail. Sort by name, modified or created date (ascending/descending) — **the list
@@ -197,6 +208,8 @@ Other notes:
 - **Merge all videos in that folder** into a single MP4, in the order you choose.
 - **Orientation filter** (default *landscape*): clips that don't match are listed but ignored.
 - **Per-clip length limit** (default *20 s*): longer clips are trimmed, `0` keeps the full length.
+- **Automatic software stabilization** (default *off*): once switched on, every clip is stabilized
+  with optical-flow motion tracking — no per-clip setup. See [Stabilization](#stabilization).
 - **Title text burned into every frame**, with 9 positions (default *bottom right*) and a free
   colour (default *white*), an adjustable size and an optional shadow for legibility.
 - **Sorting by name, modified date or created date**, ascending or descending. The list order is
@@ -212,15 +225,69 @@ Other notes:
 
 | Concern | Approach |
 | --- | --- |
-| GPU usage | Decoding and encoding run through **WebCodecs**, which uses the platform's hardware video engine. The encoder is configured with `prefer-hardware` when the browser reports that this configuration is supported, and falls back automatically otherwise. |
-| Compositing | Frames are scaled, letterboxed/cropped and stamped with the title on a GPU-backed `OffscreenCanvas` inside a worker, so the UI thread never blocks. The title is rasterised **once** into a bitmap and then blitted per frame. |
-| Memory | One clip is processed at a time, each frame is closed immediately after use, and every `add()` call is awaited so backpressure from the encoder and from the disk writer propagates all the way back into the read loop. The muxed file is streamed to disk in 8 MiB chunks through a `FileSystemWritableFileStream`, so a 2-hour output uses no more memory than a 2-second one. Browsers without the File System Access API stream into private browser storage instead, so the result never has to be assembled in RAM either. |
+| GPU usage | Decoding and encoding run through **WebCodecs**, which uses the platform's hardware video engine (NVDEC/NVENC, Quick Sync, VCN). Both the decoders and the encoder are asked for `prefer-hardware` when the browser reports that the configuration is supported, and each falls back automatically otherwise — a clip whose hardware decode fails is retried in software rather than dropped. |
+| Keeping the hardware busy | Several clips are demuxed, decoded and composited **at the same time**, in concurrent lanes that run ahead of the encoder, so the encoder never waits for the next frame to be decoded and the GPU's decode and encode blocks work in parallel. The lane count and the look-ahead are derived from the detected GPU, core count and memory (see `src/lib/hardware.ts`) and can be overridden with the *Acceleration* setting. Folder metadata is read by a small pool of workers for the same reason. |
+| Compositing | Frames are scaled, letterboxed/cropped and stamped with the title on a GPU-backed `OffscreenCanvas` inside a worker, so the UI thread never blocks. The title is rasterised **once** into a bitmap and then blitted per frame. Finished frames never cross a worker boundary — that would force a read-back out of GPU memory, which measured about four times slower than compositing and encoding on the same thread. |
+| Memory | The look-ahead is a *memory budget*, not a frame count: each lane may only run a few frames ahead, sized so all lanes together stay inside a fraction of system memory (capped at 768 MB) whatever the resolution. Each frame is closed immediately after use, and every `add()` call is awaited so backpressure from the encoder and from the disk writer propagates all the way back into the read loops. The muxed file is streamed to disk in 8 MiB chunks through a `FileSystemWritableFileStream`, so a 2-hour output uses no more memory than a 2-second one. Browsers without the File System Access API stream into private browser storage instead, so the result never has to be assembled in RAM either. |
 | Wasted work | Frames arriving faster than the target frame rate are dropped before they reach the compositor, and frames are never duplicated when a source runs slower. |
 
 Codec selection tries AVC → HEVC → AV1 → VP9 and picks the first one the browser can encode at the
 chosen resolution; audio is re-encoded to AAC (or Opus) at 48 kHz stereo. Clips without a usable
 audio track — or with an audio track the browser refuses to decode — are padded with silence so the
 merged timeline stays in sync.
+
+## Stabilization
+
+Turning the *Stabilizer* setting on makes every clip in the merge get stabilized automatically —
+there is nothing to mark up per clip. It is off by default because it is the one setting that costs
+real time.
+
+The algorithms come from **OpenCV** via [`@techstark/opencv-js`](https://www.npmjs.com/package/@techstark/opencv-js),
+a WebAssembly build of the library. Nothing about that changes the offline promise: the WASM is
+bundled with the app and precached by the service worker like every other asset, so stabilization
+works with the network unplugged too.
+
+**How a clip is stabilized.** [`src/lib/stabilizer.ts`](src/lib/stabilizer.ts) implements the
+standard two-pass approach:
+
+1. **Measure.** The clip is decoded once at a reduced size (long edge 480 px) and, for each pair of
+   consecutive frames, `goodFeaturesToTrack` picks trackable corners, `calcOpticalFlowPyrLK`
+   follows them into the next frame, and `estimateAffine2D` fits the motion that best explains where
+   they went. RANSAC discards the points that disagree, which is what keeps a car driving through
+   the shot from being mistaken for the camera moving. Adding those deltas up gives the path the
+   camera actually took.
+2. **Smooth.** That path is smoothed, and the gap between the smoothed and the measured path is the
+   correction each frame needs. Before smoothing, the path's straight-line trend is removed and
+   added back afterwards — without that step a steady pan is read as a slowing one, and the result
+   is a picture that visibly drags sideways at the start and end of every clip.
+3. **Apply.** While the clip is encoded, each frame is drawn shifted and rotated by its correction
+   and zoomed just enough to keep the uncovered edges outside the frame. The zoom is computed from
+   the corrections the clip actually needed, so steady footage is not cropped at all.
+
+Only translation and rotation are corrected. `estimateAffine2D` also reports scale and shear, but in
+handheld footage those are parallax and noise rather than shake, and "correcting" them warps the
+picture instead of steadying it.
+
+| Preset | Smoothing window | Maximum crop | Good for |
+| --- | --- | --- | --- |
+| Light | ±10 frames | 4 % | Deliberate camera work you want to keep — pans and follows stay intact |
+| Standard | ±22 frames | 8 % | Handheld footage |
+| Strong | ±40 frames | 14 % | Walking, action cams, anything badly shaken |
+
+A stronger preset smooths over a longer stretch of time, which needs a bigger correction and
+therefore a bigger crop to hide the edges it uncovers. The crop is a **ceiling**, not a cost: each
+clip is only zoomed as far as its own corrections require.
+
+**What it costs.** The measuring pass decodes every clip a second time, and the tracking itself is
+CPU work that cannot be handed to the GPU the way encoding can. Expect a stabilized merge to take
+roughly two to four times as long, depending on how much of the decoding the hardware takes on.
+Clips are analyzed in the same parallel lanes that render them, so the cost is spread across
+threads rather than added as a serial step in front of the merge.
+
+**When it cannot help.** A clip with nothing trackable in it (a blank sky, heavy motion blur) is
+merged unstabilized and a warning is logged; the same happens if OpenCV fails to load. Stabilization
+is never allowed to cost you a clip.
+
 
 ### Mixed audio formats
 
@@ -262,6 +329,11 @@ all. The worker reports its progress to the page, so the badge in the header sho
 An `Offline: incomplete` badge almost always means the server rejected those files — see the file
 permissions note under [Deployment](#deployment).
 
+The OpenCV WebAssembly build behind the [stabilizer](#stabilization) is precached along with
+everything else, so stabilization works offline too. It is by far the largest asset (~10 MB, which
+dominates the precache), and it is split into its own chunk that the app only *executes* when a
+merge actually uses the stabilizer — leaving the setting off costs nothing at runtime.
+
 ## Browser support
 
 | Feature | Requirement |
@@ -278,7 +350,11 @@ The app must be served from a secure context (`https://` or `http://localhost`).
 index.html                     UI markup
 src/styles.css                 black & white theme
 src/main.ts                    folder scanning, clip list, settings, progress UI
-src/worker/pipeline.worker.ts  probing + the decode → composite → encode → mux pipeline
+src/worker/pipeline.worker.ts  probing, the render lanes, and the encode → mux stage
+src/worker/clip-renderer.ts    per-clip demux → decode → composite work run by each lane
+src/lib/hardware.ts            GPU/CPU detection and the lane + look-ahead budget it derives
+src/lib/stabilizer.ts          optical-flow motion analysis, trajectory smoothing, frame correction
+src/lib/opencv.ts              lazy OpenCV.js loader (isolates its thenable module object)
 src/lib/audio.ts               normalizes any channel layout / sample rate to 48 kHz stereo
 src/lib/                       formatting helpers and persisted settings
 src/dev/test-media.ts          dev-only fixture generator (not part of the bundle)

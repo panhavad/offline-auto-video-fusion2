@@ -13,6 +13,7 @@
 		"test": "tsc --noEmit"
 	},
 	"dependencies": {
+		"@techstark/opencv-js": "4.12.0-release.1",
 		"mediabunny": "^1.55.3"
 	},
 	"devDependencies": {

@@ -1,6 +1,9 @@
 import { formatBytes, formatClock, formatDate, formatDuration, timestampSlug } from './lib/format';
 import { formatFrameRate, resolveFrameRate } from './lib/framerate';
+import { describeHardware, detectHardware } from './lib/hardware';
+import { formatSize, isCropped, resolveFitMode, resolveOutputSize } from './lib/resolution';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type AppSettings } from './lib/settings';
+import { STABILIZER_LABELS } from './lib/stabilizer';
 import type {
 	MergeItem,
 	MergeProgress,
@@ -15,6 +18,8 @@ import type {
 
 const VIDEO_EXTENSIONS = ['.mp4', '.m4v', '.mov', '.qt', '.webm', '.mkv', '.mpg', '.mpeg', '.ts', '.m2ts', '.ogv'];
 const PROBE_CONCURRENCY = 4;
+/** Upper bound for the metadata worker pool, so scanning never starves the rest of the machine. */
+const PROBE_POOL_LIMIT = 4;
 /** Files this app produced (e.g. merged-20250904-101500.mp4) must not become inputs of the next run. */
 const OUTPUT_NAME_PATTERN = /^merged-\d{8}-\d{6}\.mp4$/i;
 
@@ -59,7 +64,11 @@ const ui = {
 	titleColor: el<HTMLInputElement>('title-color'),
 	titleColorHex: el<HTMLInputElement>('title-color-hex'),
 	titleScale: el<HTMLInputElement>('title-scale'),
+	resolution: el<HTMLSelectElement>('resolution'),
+	aspectRatio: el<HTMLSelectElement>('aspect-ratio'),
 	frameRate: el<HTMLSelectElement>('frame-rate'),
+	acceleration: el<HTMLSelectElement>('acceleration'),
+	stabilize: el<HTMLSelectElement>('stabilize'),
 	clipCount: el<HTMLSpanElement>('clip-count'),
 	sortKey: el<HTMLSelectElement>('sort-key'),
 	sortDir: el<HTMLButtonElement>('sort-dir'),
@@ -100,7 +109,7 @@ const generatedOutputs = new Set<string>();
 
 const isGeneratedOutput = (name: string): boolean => OUTPUT_NAME_PATTERN.test(name) || generatedOutputs.has(name);
 
-const pendingProbes = new Map<string, (result: ProbeResult) => void>();
+const pendingProbes = new Map<string, { resolve: (result: ProbeResult) => void; worker: Worker }>();
 
 const applyTheme = () => {
 	const dark = settings.theme === 'dark';
@@ -117,7 +126,26 @@ const createWorker = (): Worker => {
 	return instance;
 };
 
+/** The worker that performs the merge; it is also the first member of the probe pool. */
 let worker: Worker = createWorker();
+
+/**
+ * Reading metadata is demuxing plus a frame decode per file, which is real per-file CPU work. One
+ * worker can only do one file at a time, so folders are scanned across a small pool of threads.
+ */
+const probeWorkers: Worker[] = [];
+let probeCursor = 0;
+
+const growProbePool = (size: number) => {
+	while (probeWorkers.length < size - 1) probeWorkers.push(createWorker());
+};
+
+const nextProbeWorker = (): Worker => {
+	const pool = [worker, ...probeWorkers];
+	const chosen = pool[probeCursor % pool.length];
+	probeCursor++;
+	return chosen;
+};
 
 const send = (message: WorkerInMessage) => worker.postMessage(message);
 
@@ -148,7 +176,11 @@ const applySettingsToForm = () => {
 	ui.titleColor.value = settings.titleColor;
 	ui.titleColorHex.value = settings.titleColor;
 	ui.titleScale.value = String(settings.titleScale);
+	ui.resolution.value = settings.resolution;
+	ui.aspectRatio.value = settings.aspectRatio;
 	ui.frameRate.value = settings.frameRate === 'auto' ? 'auto' : String(settings.frameRate);
+	ui.acceleration.value = settings.accelerationMode;
+	ui.stabilize.value = settings.stabilize;
 	ui.sortKey.value = settings.sortKey;
 	ui.recursive.checked = settings.recursive;
 	updateSortButton();
@@ -161,8 +193,12 @@ const readSettingsFromForm = () => {
 	settings.titlePosition = ui.titlePosition.value as AppSettings['titlePosition'];
 	settings.titleColor = ui.titleColor.value.toUpperCase();
 	settings.titleScale = Math.min(30, Math.max(2, Number(ui.titleScale.value) || DEFAULT_SETTINGS.titleScale));
+	settings.resolution = ui.resolution.value as AppSettings['resolution'];
+	settings.aspectRatio = ui.aspectRatio.value as AppSettings['aspectRatio'];
 	settings.frameRate =
 		ui.frameRate.value === 'auto' ? 'auto' : Number(ui.frameRate.value) || DEFAULT_SETTINGS.frameRate;
+	settings.accelerationMode = ui.acceleration.value as AppSettings['accelerationMode'];
+	settings.stabilize = ui.stabilize.value as AppSettings['stabilize'];
 	settings.sortKey = ui.sortKey.value as SortKey;
 	settings.recursive = ui.recursive.checked;
 	saveSettings(settings);
@@ -182,10 +218,13 @@ const mergeSettings = (): MergeSettings => ({
 	titleShadow: settings.titleShadow,
 	fit: settings.fit,
 	resolution: settings.resolution,
+	aspectRatio: settings.aspectRatio,
 	quality: settings.quality,
 	frameRate: settings.frameRate,
+	stabilize: settings.stabilize,
 	includeAudio: settings.includeAudio,
 	preferHardware: settings.preferHardware,
+	accelerationMode: settings.accelerationMode,
 });
 
 // ---------------------------------------------------------------------------
@@ -367,10 +406,25 @@ const updateSummary = () => {
 			settings.frameRate,
 			eligible.map((entry) => entry.probe?.frameRate ?? null),
 		);
+		// The first eligible clip defines the output frame, exactly like the worker computes it.
+		const output = resolveOutputSize(
+			settings.resolution,
+			settings.aspectRatio,
+			eligible[0].probe?.width ?? 0,
+			eligible[0].probe?.height ?? 0,
+		);
+		const framesFollowFirstClip = settings.resolution === 'auto' && settings.aspectRatio === 'auto';
+		const cropped =
+			resolveFitMode(settings.resolution, settings.aspectRatio, settings.fit) === 'cover'
+				? eligible.filter((entry) => isCropped(entry.probe?.width ?? 0, entry.probe?.height ?? 0, output)).length
+				: 0;
 		ui.mergeSummary.textContent =
 			`${eligible.length} clip${eligible.length === 1 ? '' : 's'} · merged length ≈ ${formatDuration(totalSource)}` +
 			`${trimmed > 0 ? ` · ${trimmed} will be trimmed to ${settings.maxClipSeconds}s` : ''}` +
+			` · ${framesFollowFirstClip ? `auto ${formatSize(output)}` : formatSize(output)}` +
+			`${cropped > 0 ? ` · ${cropped} will be cropped to fit` : ''}` +
 			` · ${settings.frameRate === 'auto' ? `auto ${formatFrameRate(resolvedFps)}` : formatFrameRate(resolvedFps)}` +
+			`${settings.stabilize === 'off' ? '' : ` · ${STABILIZER_LABELS[settings.stabilize]} stabilization`}` +
 			`${probing ? ' · still reading metadata…' : ''}` +
 			` · order: ${settings.sortKey} ${settings.sortDirection === 'asc' ? '↑' : '↓'}`;
 	}
@@ -385,13 +439,21 @@ const updateSummary = () => {
 
 const probeEntry = (entry: ClipEntry): Promise<ProbeResult> =>
 	new Promise<ProbeResult>((resolve) => {
-		pendingProbes.set(entry.id, resolve);
-		send({ type: 'probe', id: entry.id, file: entry.file });
+		const target = nextProbeWorker();
+		pendingProbes.set(entry.id, { resolve, worker: target });
+		target.postMessage({ type: 'probe', id: entry.id, file: entry.file } satisfies WorkerInMessage);
 	});
 
 const probeAll = async () => {
 	const queue = entries.filter((entry) => entry.status === 'pending');
 	if (queue.length === 0) return;
+
+	// Match the pool to the machine: enough threads to keep the disk and the decoders busy, but
+	// never so many that the browser starts fighting itself over memory.
+	const profile = await detectHardware();
+	const poolSize = Math.max(1, Math.min(PROBE_POOL_LIMIT, Math.floor(profile.cores / 3), queue.length));
+	growProbePool(poolSize);
+	const concurrency = Math.min(queue.length, Math.max(PROBE_CONCURRENCY, poolSize * 2));
 
 	let done = 0;
 	let cursor = 0;
@@ -422,7 +484,7 @@ const probeAll = async () => {
 		}
 	};
 
-	await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, queue.length) }, runNext));
+	await Promise.all(Array.from({ length: concurrency }, runNext));
 	ui.probeStatus.textContent = `${entries.filter((entry) => entry.probe?.ok).length} readable of ${entries.length}`;
 	render();
 };
@@ -524,7 +586,11 @@ const setBusy = (busy: boolean) => {
 		ui.titleColor,
 		ui.titleColorHex,
 		ui.titleScale,
+		ui.resolution,
+		ui.aspectRatio,
 		ui.frameRate,
+		ui.acceleration,
+		ui.stabilize,
 		ui.sortKey,
 		ui.sortDir,
 		ui.selectAll,
@@ -769,9 +835,9 @@ function handleWorkerMessage(event: MessageEvent<WorkerOutMessage>) {
 	const message = event.data;
 	switch (message.type) {
 		case 'probed': {
-			const resolve = pendingProbes.get(message.id);
+			const pending = pendingProbes.get(message.id);
 			pendingProbes.delete(message.id);
-			resolve?.(message.result);
+			pending?.resolve(message.result);
 			break;
 		}
 		case 'log':
@@ -841,11 +907,17 @@ function handleWorkerMessage(event: MessageEvent<WorkerOutMessage>) {
 }
 
 function handleWorkerError(event: ErrorEvent) {
-	addLog(`Background worker crashed: ${event.message}. Restarting it…`, 'error');
+	const source = event.target instanceof Worker ? event.target : worker;
+	const isMergeWorker = source === worker;
+	addLog(
+		`Background worker crashed: ${event.message}.${isMergeWorker ? ' Restarting it…' : ' Dropping that metadata thread…'}`,
+		'error',
+	);
 
 	// Unblock everything that was waiting on the dead worker, then bring up a fresh one.
-	for (const [id, resolve] of pendingProbes) {
-		resolve({
+	for (const [id, pending] of pendingProbes) {
+		if (pending.worker !== source) continue;
+		pending.resolve({
 			ok: false,
 			error: 'Worker crashed while reading this file',
 			width: 0,
@@ -862,9 +934,17 @@ function handleWorkerError(event: ErrorEvent) {
 		pendingProbes.delete(id);
 	}
 
-	worker.removeEventListener('message', handleWorkerMessage);
-	worker.removeEventListener('error', handleWorkerError);
-	worker.terminate();
+	source.removeEventListener('message', handleWorkerMessage);
+	source.removeEventListener('error', handleWorkerError);
+	source.terminate();
+
+	if (!isMergeWorker) {
+		// A metadata thread is disposable: drop it and let the pool grow again on the next scan.
+		const position = probeWorkers.indexOf(source);
+		if (position >= 0) probeWorkers.splice(position, 1);
+		return;
+	}
+
 	worker = createWorker();
 
 	if (merging) {
@@ -905,7 +985,11 @@ for (const control of [
 	ui.titleText,
 	ui.titlePosition,
 	ui.titleScale,
+	ui.resolution,
+	ui.aspectRatio,
 	ui.frameRate,
+	ui.acceleration,
+	ui.stabilize,
 	ui.recursive,
 ]) {
 	control.addEventListener('change', () => {
@@ -988,6 +1072,14 @@ const reportCapabilities = () => {
 		ui.supportBadge.textContent = '';
 		ui.supportBadge.className = 'pill pill-muted hidden';
 	}
+
+	if (!hasCodecs) return;
+	void detectHardware().then((profile) => {
+		addLog(`Detected ${describeHardware(profile)}.`);
+		if (profile.discrete) {
+			addLog('A dedicated GPU was found; decoding, compositing and encoding will run in parallel on it.', 'ok');
+		}
+	});
 };
 
 type PrecacheProgress = {

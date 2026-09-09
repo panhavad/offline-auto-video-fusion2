@@ -378,7 +378,10 @@ main {
 
 .field-title-position select,
 .field-orientation select,
-.settings-grid #frame-rate {
+.settings-grid #resolution,
+.settings-grid #aspect-ratio,
+.settings-grid #frame-rate,
+.settings-grid #stabilize {
 	width: max-content;
 }
 

@@ -67,6 +67,32 @@
 						<input type="number" id="max-clip" min="0" max="3600" step="1" />
 					</label>
 
+					<label class="field field-resolution">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">▣</span>Resolution</span>
+						<select id="resolution">
+							<option value="auto">Auto (match first clip)</option>
+							<option value="2160">2160p (4K)</option>
+							<option value="1440">1440p</option>
+							<option value="1080">1080p</option>
+							<option value="720">720p</option>
+							<option value="480">480p</option>
+						</select>
+					</label>
+
+					<label class="field field-aspect-ratio">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">▭</span>Aspect ratio</span>
+						<select id="aspect-ratio">
+							<option value="auto">Auto (match first clip)</option>
+							<option value="16:9">16:9 (landscape)</option>
+							<option value="9:16">9:16 (vertical)</option>
+							<option value="4:3">4:3</option>
+							<option value="3:4">3:4</option>
+							<option value="1:1">1:1 (square)</option>
+							<option value="4:5">4:5</option>
+							<option value="21:9">21:9 (cinematic)</option>
+						</select>
+					</label>
+
 					<label class="field">
 						<span class="field-label"><span class="control-icon" aria-hidden="true">◴</span>Frame rate</span>
 						<select id="frame-rate">
@@ -77,6 +103,26 @@
 							<option value="50">50 fps</option>
 							<option value="60">60 fps</option>
 							<option value="120">120 fps</option>
+						</select>
+					</label>
+
+					<label class="field field-acceleration">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">⚡</span>Acceleration</span>
+						<select id="acceleration" title="How much of this machine the merge may use">
+							<option value="auto">Auto (match this machine)</option>
+							<option value="max">Maximum (use every core)</option>
+							<option value="balanced">Balanced (leave headroom)</option>
+							<option value="safe">Compatibility (single thread)</option>
+						</select>
+					</label>
+
+					<label class="field field-stabilize">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">◎</span>Stabilizer</span>
+						<select id="stabilize" title="Software stabilization: smooths out camera shake, at the cost of a second decoding pass">
+							<option value="off">Off (fastest)</option>
+							<option value="light">Light (keeps pans)</option>
+							<option value="standard">Standard</option>
+							<option value="strong">Strong (crops more)</option>
 						</select>
 					</label>
 
