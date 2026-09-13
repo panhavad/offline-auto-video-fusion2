@@ -28,6 +28,28 @@ export type StabilizerSetting = 'off' | 'light' | 'standard' | 'strong';
 export type AccelerationMode = 'auto' | 'max' | 'balanced' | 'safe';
 /** `auto` derives the cap from the selected clips; a number is an explicit upper limit in fps. */
 export type FrameRateSetting = number | 'auto';
+export type GpsMapPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+
+export interface GpsPoint {
+	latitude: number;
+	longitude: number;
+	/** Unix time in milliseconds, or null for an untimed route. */
+	timestamp: number | null;
+	/** Metres above sea level when supplied by the GPS file. */
+	elevation: number | null;
+	/** Metres per second when supplied by the GPS file. */
+	speed: number | null;
+}
+
+export interface GpsTrack {
+	name: string;
+	points: GpsPoint[];
+}
+
+export interface GeoPoint {
+	latitude: number;
+	longitude: number;
+}
 
 export interface ProbeResult {
 	ok: boolean;
@@ -41,6 +63,8 @@ export interface ProbeResult {
 	hasAudio: boolean;
 	codec: string | null;
 	createdAt: number | null;
+	/** Recording location parsed from the video's metadata when available. */
+	location: GeoPoint | null;
 	/** Small JPEG preview of an early frame, or null when no frame could be decoded. */
 	thumbnail: Blob | null;
 }
@@ -62,6 +86,7 @@ export interface MergeSettings {
 	includeAudio: boolean;
 	preferHardware: boolean;
 	accelerationMode: AccelerationMode;
+	gpsMapPosition: GpsMapPosition;
 }
 
 export interface MergeItem {
@@ -72,6 +97,10 @@ export interface MergeItem {
 	plannedSeconds: number;
 	/** Frame rate measured while probing, or null when it could not be determined. */
 	sourceFrameRate: number | null;
+	/** Creation time used to align a timestamped GPS track with this clip. */
+	createdAt: number | null;
+	/** Embedded video coordinate used as a synchronization fallback. */
+	location: GeoPoint | null;
 }
 
 export type MergeTarget =
@@ -82,6 +111,7 @@ export interface MergeRequest {
 	items: MergeItem[];
 	settings: MergeSettings;
 	target: MergeTarget;
+	gpsTrack: GpsTrack | null;
 }
 
 export type WorkerInMessage =

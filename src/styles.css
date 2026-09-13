@@ -368,6 +368,18 @@ main {
 	width: min(100%, 560px);
 }
 
+.field-gps-file {
+	grid-column: span 2;
+}
+
+.field-gps-file .row {
+	flex-wrap: nowrap;
+}
+
+.field-gps-file .btn {
+	padding-block: 4px;
+}
+
 .field-max-clip input {
 	width: 8ch;
 }
@@ -381,7 +393,8 @@ main {
 .settings-grid #resolution,
 .settings-grid #aspect-ratio,
 .settings-grid #frame-rate,
-.settings-grid #stabilize {
+.settings-grid #stabilize,
+.settings-grid #gps-position {
 	width: max-content;
 }
 
@@ -696,6 +709,9 @@ footer {
 	.field-title {
 		grid-column: 1 / -1;
 	}
+	.field-gps-file {
+		grid-column: 1 / -1;
+	}
 }
 
 @media (max-width: 430px) {
@@ -703,6 +719,9 @@ footer {
 		grid-template-columns: 1fr;
 	}
 	.field-title {
+		grid-column: auto;
+	}
+	.field-gps-file {
 		grid-column: auto;
 	}
 }

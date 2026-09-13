@@ -1,5 +1,6 @@
 import { formatBytes, formatClock, formatDate, formatDuration, timestampSlug } from './lib/format';
 import { formatFrameRate, resolveFrameRate } from './lib/framerate';
+import { parseGpsFile } from './lib/gps';
 import { describeHardware, detectHardware } from './lib/hardware';
 import { formatSize, isCropped, resolveFitMode, resolveOutputSize } from './lib/resolution';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type AppSettings } from './lib/settings';
@@ -9,6 +10,7 @@ import type {
 	MergeProgress,
 	MergeSettings,
 	MergeTarget,
+	GpsTrack,
 	ProbeResult,
 	SortDirection,
 	SortKey,
@@ -69,6 +71,10 @@ const ui = {
 	frameRate: el<HTMLSelectElement>('frame-rate'),
 	acceleration: el<HTMLSelectElement>('acceleration'),
 	stabilize: el<HTMLSelectElement>('stabilize'),
+	gpsFile: el<HTMLInputElement>('gps-file'),
+	gpsClear: el<HTMLButtonElement>('gps-clear'),
+	gpsStatus: el<HTMLSpanElement>('gps-status'),
+	gpsPosition: el<HTMLSelectElement>('gps-position'),
 	clipCount: el<HTMLSpanElement>('clip-count'),
 	sortKey: el<HTMLSelectElement>('sort-key'),
 	sortDir: el<HTMLButtonElement>('sort-dir'),
@@ -105,6 +111,8 @@ let starting = false;
 let scanToken = 0;
 let idCounter = 0;
 let downloadUrl: string | null = null;
+let gpsTrack: GpsTrack | null = null;
+let gpsFileToken = 0;
 const generatedOutputs = new Set<string>();
 
 const isGeneratedOutput = (name: string): boolean => OUTPUT_NAME_PATTERN.test(name) || generatedOutputs.has(name);
@@ -181,6 +189,7 @@ const applySettingsToForm = () => {
 	ui.frameRate.value = settings.frameRate === 'auto' ? 'auto' : String(settings.frameRate);
 	ui.acceleration.value = settings.accelerationMode;
 	ui.stabilize.value = settings.stabilize;
+	ui.gpsPosition.value = settings.gpsMapPosition;
 	ui.sortKey.value = settings.sortKey;
 	ui.recursive.checked = settings.recursive;
 	updateSortButton();
@@ -199,6 +208,7 @@ const readSettingsFromForm = () => {
 		ui.frameRate.value === 'auto' ? 'auto' : Number(ui.frameRate.value) || DEFAULT_SETTINGS.frameRate;
 	settings.accelerationMode = ui.acceleration.value as AppSettings['accelerationMode'];
 	settings.stabilize = ui.stabilize.value as AppSettings['stabilize'];
+	settings.gpsMapPosition = ui.gpsPosition.value as AppSettings['gpsMapPosition'];
 	settings.sortKey = ui.sortKey.value as SortKey;
 	settings.recursive = ui.recursive.checked;
 	saveSettings(settings);
@@ -225,6 +235,7 @@ const mergeSettings = (): MergeSettings => ({
 	includeAudio: settings.includeAudio,
 	preferHardware: settings.preferHardware,
 	accelerationMode: settings.accelerationMode,
+	gpsMapPosition: settings.gpsMapPosition,
 });
 
 // ---------------------------------------------------------------------------
@@ -425,6 +436,7 @@ const updateSummary = () => {
 			`${cropped > 0 ? ` · ${cropped} will be cropped to fit` : ''}` +
 			` · ${settings.frameRate === 'auto' ? `auto ${formatFrameRate(resolvedFps)}` : formatFrameRate(resolvedFps)}` +
 			`${settings.stabilize === 'off' ? '' : ` · ${STABILIZER_LABELS[settings.stabilize]} stabilization`}` +
+			`${gpsTrack ? ` · GPS mini map (${gpsTrack.points.length} points)` : ''}` +
 			`${probing ? ' · still reading metadata…' : ''}` +
 			` · order: ${settings.sortKey} ${settings.sortDirection === 'asc' ? '↑' : '↓'}`;
 	}
@@ -591,6 +603,9 @@ const setBusy = (busy: boolean) => {
 		ui.frameRate,
 		ui.acceleration,
 		ui.stabilize,
+		ui.gpsFile,
+		ui.gpsClear,
+		ui.gpsPosition,
 		ui.sortKey,
 		ui.sortDir,
 		ui.selectAll,
@@ -802,6 +817,8 @@ const startMerge = async () => {
 				file: entry.file,
 				plannedSeconds: plannedSeconds(entry),
 				sourceFrameRate: entry.probe?.frameRate ?? null,
+				createdAt: entry.probe?.createdAt ?? null,
+				location: entry.probe?.location ?? null,
 			};
 		});
 
@@ -809,7 +826,7 @@ const startMerge = async () => {
 		resetProgressUi();
 		render();
 		addLog(`Merging ${items.length} clip${items.length === 1 ? '' : 's'} → ${output.where}`);
-		send({ type: 'merge', request: { items, settings: mergeSettings(), target: output.target } });
+		send({ type: 'merge', request: { items, settings: mergeSettings(), target: output.target, gpsTrack } });
 	} finally {
 		starting = false;
 		updateSummary();
@@ -929,6 +946,7 @@ function handleWorkerError(event: ErrorEvent) {
 			hasAudio: false,
 			codec: null,
 			createdAt: null,
+			location: null,
 			thumbnail: null,
 		});
 		pendingProbes.delete(id);
@@ -990,6 +1008,7 @@ for (const control of [
 	ui.frameRate,
 	ui.acceleration,
 	ui.stabilize,
+	ui.gpsPosition,
 	ui.recursive,
 ]) {
 	control.addEventListener('change', () => {
@@ -997,6 +1016,42 @@ for (const control of [
 		render();
 	});
 }
+
+ui.gpsFile.addEventListener('change', () => {
+	const file = ui.gpsFile.files?.[0];
+	if (!file) return;
+	const token = ++gpsFileToken;
+	ui.gpsStatus.textContent = `Reading ${file.name}…`;
+	void parseGpsFile(file)
+		.then((track) => {
+			if (token !== gpsFileToken) return;
+			gpsTrack = track;
+			ui.gpsStatus.textContent = `${track.name} · ${track.points.length} points${track.points[0].timestamp === null ? ' · untimed' : ' · timestamped'}`;
+			ui.gpsClear.classList.remove('hidden');
+			addLog(`GPS track loaded: ${track.points.length} points from "${track.name}".`, 'ok');
+			render();
+		})
+		.catch((error) => {
+			if (token !== gpsFileToken) return;
+			gpsTrack = null;
+			ui.gpsFile.value = '';
+			ui.gpsClear.classList.add('hidden');
+			const message = error instanceof Error ? error.message : String(error);
+			ui.gpsStatus.textContent = `Could not read GPS data: ${message}`;
+			addLog(`GPS file rejected: ${message}`, 'error');
+			render();
+		});
+});
+
+ui.gpsClear.addEventListener('click', () => {
+	gpsFileToken++;
+	gpsTrack = null;
+	ui.gpsFile.value = '';
+	ui.gpsStatus.textContent = 'GPX, KML, GeoJSON or CSV';
+	ui.gpsClear.classList.add('hidden');
+	addLog('GPS mini map removed.');
+	render();
+});
 
 ui.titleColor.addEventListener('input', () => {
 	ui.titleColorHex.value = ui.titleColor.value.toUpperCase();

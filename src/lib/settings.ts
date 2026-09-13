@@ -2,6 +2,7 @@ import type {
 	AccelerationMode,
 	AspectRatioSetting,
 	FrameRateSetting,
+	GpsMapPosition,
 	MergeSettings,
 	ResolutionPreset,
 	SortDirection,
@@ -18,6 +19,7 @@ const ASPECT_RATIOS: AspectRatioSetting[] = ['auto', '16:9', '9:16', '4:3', '3:4
 const STABILIZER_SETTINGS: StabilizerSetting[] = ['off', 'light', 'standard', 'strong'];
 
 const ACCELERATION_MODES: AccelerationMode[] = ['auto', 'max', 'balanced', 'safe'];
+const GPS_MAP_POSITIONS: GpsMapPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 
 const sanitizeFrameRate = (value: unknown): FrameRateSetting => {
 	if (value === 'auto') return 'auto';
@@ -45,6 +47,11 @@ const sanitizeAcceleration = (value: unknown): AccelerationMode =>
 		? (value as AccelerationMode)
 		: DEFAULT_SETTINGS.accelerationMode;
 
+const sanitizeGpsMapPosition = (value: unknown): GpsMapPosition =>
+	GPS_MAP_POSITIONS.includes(value as GpsMapPosition)
+		? (value as GpsMapPosition)
+		: DEFAULT_SETTINGS.gpsMapPosition;
+
 export interface AppSettings extends MergeSettings {
 	sortKey: SortKey;
 	sortDirection: SortDirection;
@@ -69,6 +76,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	includeAudio: true,
 	preferHardware: true,
 	accelerationMode: 'auto',
+	gpsMapPosition: 'bottom-left',
 	sortKey: 'name',
 	sortDirection: 'asc',
 	recursive: false,
@@ -93,6 +101,7 @@ export const loadSettings = (): AppSettings => {
 			includeAudio: DEFAULT_SETTINGS.includeAudio,
 			preferHardware: DEFAULT_SETTINGS.preferHardware,
 			accelerationMode: sanitizeAcceleration(parsed.accelerationMode),
+			gpsMapPosition: sanitizeGpsMapPosition(parsed.gpsMapPosition),
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };

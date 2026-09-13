@@ -120,6 +120,8 @@ instead.
 | Title text / position / color / size | Text burned into every frame, at one of 9 positions. `\n` starts a second line. |
 | Frame rate | Upper limit — source frames are never duplicated to reach it. *Auto* (default) matches the fastest selected clip, or falls back to a 120 fps limit when no source rate can be detected. |
 | Stabilizer | Software stabilization applied automatically to **every** clip. *Off* (default) skips it entirely; *Light* / *Standard* / *Strong* trade an increasing crop for an increasingly steady picture. See [Stabilization](#stabilization). |
+| GPS data | Optional GPX, KML, GeoJSON or CSV track. When supplied, an offline vector mini map with the current position, speed and elevation is burned into the video. Timestamped tracks align to each video's creation metadata; embedded video coordinates are used as a fallback anchor. |
+| Mini map position | Places the GPS overlay in any corner of the output frame. |
 | Acceleration | How much of the machine the merge may use. *Auto* (default) sizes the pipeline from the detected GPU, core count and memory; *Maximum* pushes further on a workstation; *Balanced* leaves headroom for other work; *Compatibility* falls back to the strictly sequential pipeline. The detected GPU is written to the log when the app starts. |
 
 With both frame controls on *auto* the output is exactly the first clip's frame, and clips of a
@@ -131,6 +133,11 @@ requested size, the frame is scaled down automatically and a warning is logged.
 
 Quality, title shadow, and audio use their optimized defaults. Processing always requests GPU
 encoding and falls back to software automatically when hardware encoding is not available.
+
+GPS CSV files need `latitude` and `longitude` columns and may also include `time`/`timestamp`,
+`elevation` and `speed` (metres per second). A timestamped point must have a timestamp on every row.
+Untimed routes are advanced across each clip by relative progress. The mini map uses no online map
+tiles, so GPS rendering remains private and works offline.
 
 **3 · Review the clips.** Each clip is probed in a worker: resolution, orientation, duration, dates
 and a decoded thumbnail. Sort by name, modified or created date (ascending/descending) — **the list

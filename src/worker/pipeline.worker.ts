@@ -48,6 +48,7 @@ import type {
 } from '../types';
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, AudioNormalizer } from '../lib/audio';
 import { formatFrameRate, resolveFrameRate } from '../lib/framerate';
+import { locationFromMetadata } from '../lib/gps';
 import { describeHardware, describePlan, detectHardware, planPipeline, type PipelinePlan } from '../lib/hardware';
 import { renderClip, type ClipRenderJob, type ClipRenderResult, type ClipRenderSink } from './clip-renderer';
 import {
@@ -154,6 +155,7 @@ async function probeFile(id: string, file: File): Promise<void> {
 		hasAudio: false,
 		codec: null,
 		createdAt: null,
+		location: null,
 		thumbnail: null,
 	};
 
@@ -195,11 +197,13 @@ async function probeFile(id: string, file: File): Promise<void> {
 		}
 
 		let createdAt: number | null = null;
+		let location = null;
 		try {
 			const tags = await input.getMetadataTags();
 			if (tags.date instanceof Date && !Number.isNaN(tags.date.getTime())) {
 				createdAt = tags.date.getTime();
 			}
+			location = locationFromMetadata(tags.raw);
 		} catch {
 			createdAt = null;
 		}
@@ -221,6 +225,7 @@ async function probeFile(id: string, file: File): Promise<void> {
 				hasAudio: Boolean(audioTrack),
 				codec,
 				createdAt,
+				location,
 				thumbnail,
 			},
 		});
@@ -523,7 +528,7 @@ const createRenderLane = (): RenderLane => {
 };
 
 async function runMerge(request: MergeRequest): Promise<void> {
-	const { items, settings } = request;
+	const { items, settings, gpsTrack } = request;
 	const startedAt = performance.now();
 
 	if (items.length === 0) {
@@ -629,6 +634,27 @@ async function runMerge(request: MergeRequest): Promise<void> {
 		// In auto mode the cap comes from the footage itself, so the usual hairline tolerance is
 		// widened: timestamp jitter in a nominally constant-rate source must not cost frames.
 		const minFrameSpacing = settings.frameRate === 'auto' ? frameInterval * 0.9 : frameInterval - 1e-4;
+		if (gpsTrack) {
+			const firstGpsTime = gpsTrack.points[0].timestamp;
+			const lastGpsTime = gpsTrack.points[gpsTrack.points.length - 1].timestamp;
+			if (firstGpsTime === null) {
+				log(`GPS mini map: "${gpsTrack.name}" has no timestamps, so its route follows each clip's progress.`, 'warn');
+			} else {
+				log(`GPS mini map: "${gpsTrack.name}" is synchronized from its timestamps.`);
+				for (const item of items) {
+					if (item.createdAt !== null) {
+						const clipEnd = item.createdAt + item.plannedSeconds * 1000;
+						if (clipEnd < firstGpsTime || item.createdAt > lastGpsTime!) {
+							log(`"${item.name}" is outside the GPS track's time range; its mini map will be hidden.`, 'warn');
+						}
+					} else if (item.location) {
+						log(`"${item.name}" has no creation time; its embedded GPS location anchors the mini map.`, 'warn');
+					} else {
+						log(`"${item.name}" has no usable time or GPS metadata; the mini map starts at the beginning of the track.`, 'warn');
+					}
+				}
+			}
+		}
 
 		let timelineCursor = 0;
 		let audioCursor = 0;
@@ -709,6 +735,15 @@ async function runMerge(request: MergeRequest): Promise<void> {
 			wantAudio: Boolean(audioSource) && !audioBroken,
 			preferHardware: plan.preferHardware,
 			stabilize: settings.stabilize,
+			gps: gpsTrack
+				? {
+						points: gpsTrack.points,
+						clipCreatedAt: item.createdAt,
+						clipLocation: item.location,
+						clipDuration: item.plannedSeconds,
+						position: settings.gpsMapPosition,
+					}
+				: null,
 			// Every lane composites on its own canvas, so each needs its own copy of the overlay.
 			overlay: overlay ? await createImageBitmap(overlay.canvas) : null,
 			overlayX: overlay?.x ?? 0,

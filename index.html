@@ -126,6 +126,28 @@
 						</select>
 					</label>
 
+					<div class="field field-gps-file">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">⌖</span>GPS data (optional)</span>
+						<div class="row">
+							<label class="btn btn-white file-btn">
+								Choose GPS file
+								<input type="file" id="gps-file" accept=".gpx,.kml,.csv,.json,.geojson,application/gpx+xml,text/csv,application/json" />
+							</label>
+							<button id="gps-clear" class="btn btn-white hidden" type="button">Remove</button>
+						</div>
+						<span id="gps-status" class="muted small">GPX, KML, GeoJSON or CSV</span>
+					</div>
+
+					<label class="field field-gps-position">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">◰</span>Mini map position</span>
+						<select id="gps-position">
+							<option value="top-left">Top left</option>
+							<option value="top-right">Top right</option>
+							<option value="bottom-left">Bottom left</option>
+							<option value="bottom-right">Bottom right</option>
+						</select>
+					</label>
+
 					<label class="field field-title">
 						<span class="field-label"><span class="control-icon control-icon-text" aria-hidden="true">T</span>Title text</span>
 						<input type="text" id="title-text" placeholder="Shown on every frame (leave empty for none)" />
