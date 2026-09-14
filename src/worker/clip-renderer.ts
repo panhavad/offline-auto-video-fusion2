@@ -10,6 +10,7 @@
 import { ALL_FORMATS, AudioSampleSink, BlobSource, CanvasSink, Input, VideoSampleSink } from 'mediabunny';
 import type { AudioSample, InputVideoTrack, VideoSinkDecoderOptions } from 'mediabunny';
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, AudioNormalizer } from '../lib/audio';
+import { GpsMiniMap, type GpsOverlayInput } from '../lib/gps-map';
 import {
 	ANALYSIS_LONG_EDGE,
 	ClipMotionAnalyzer,
@@ -20,15 +21,7 @@ import {
 	type StabilizerPlan,
 	type StabilizerPreset,
 } from '../lib/stabilizer';
-import type { FitMode, GeoPoint, GpsMapPosition, GpsPoint, StabilizerSetting } from '../types';
-
-export interface GpsOverlayInput {
-	points: GpsPoint[];
-	clipCreatedAt: number | null;
-	clipLocation: GeoPoint | null;
-	clipDuration: number;
-	position: GpsMapPosition;
-}
+import type { FitMode, StabilizerSetting } from '../types';
 
 export interface ClipRenderJob {
 	file: File;
@@ -68,195 +61,6 @@ export interface ClipRenderResult {
 }
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
-const distanceSquared = (a: GeoPoint, b: GeoPoint): number => {
-	const latitudeScale = Math.cos(((a.latitude + b.latitude) * Math.PI) / 360);
-	const x = (a.longitude - b.longitude) * latitudeScale;
-	const y = a.latitude - b.latitude;
-	return x * x + y * y;
-};
-
-const distanceMetres = (a: GeoPoint, b: GeoPoint): number => {
-	const latitudeScale = Math.cos(((a.latitude + b.latitude) * Math.PI) / 360);
-	const x = (b.longitude - a.longitude) * latitudeScale;
-	const y = b.latitude - a.latitude;
-	return Math.hypot(x, y) * 111_320;
-};
-
-interface PositionedGpsPoint extends GpsPoint {
-	x: number;
-	y: number;
-}
-
-class GpsMiniMap {
-	private readonly points: PositionedGpsPoint[];
-	private readonly startTime: number | null;
-	private readonly width: number;
-	private readonly height: number;
-	private readonly x: number;
-	private readonly y: number;
-	private readonly padding: number;
-	private readonly base: OffscreenCanvas;
-
-	constructor(
-		private readonly input: GpsOverlayInput,
-		frameWidth: number,
-		frameHeight: number,
-	) {
-		this.width = Math.round(Math.min(frameWidth * 0.3, frameHeight * 0.42));
-		this.height = Math.round(this.width * 0.72);
-		this.padding = Math.max(8, Math.round(this.width * 0.055));
-		const margin = Math.round(Math.min(frameWidth, frameHeight) * 0.035);
-		this.x = input.position.endsWith('right') ? frameWidth - this.width - margin : margin;
-		this.y = input.position.startsWith('bottom') ? frameHeight - this.height - margin : margin;
-
-		const minLatitude = Math.min(...input.points.map((point) => point.latitude));
-		const maxLatitude = Math.max(...input.points.map((point) => point.latitude));
-		const meanLatitude = (minLatitude + maxLatitude) / 2;
-		const longitudeScale = Math.max(0.01, Math.cos((meanLatitude * Math.PI) / 180));
-		const projected = input.points.map((point) => ({
-			point,
-			x: point.longitude * longitudeScale,
-			y: -point.latitude,
-		}));
-		const minX = Math.min(...projected.map((point) => point.x));
-		const maxX = Math.max(...projected.map((point) => point.x));
-		const minY = Math.min(...projected.map((point) => point.y));
-		const maxY = Math.max(...projected.map((point) => point.y));
-		const mapTop = this.padding;
-		const mapBottom = this.height - Math.round(this.width * 0.2);
-		const mapWidth = this.width - this.padding * 2;
-		const mapHeight = Math.max(1, mapBottom - mapTop);
-		const scale = Math.min(mapWidth / Math.max(maxX - minX, 1e-8), mapHeight / Math.max(maxY - minY, 1e-8));
-		const offsetX = this.padding + (mapWidth - (maxX - minX) * scale) / 2;
-		const offsetY = mapTop + (mapHeight - (maxY - minY) * scale) / 2;
-		this.points = projected.map(({ point, x, y }) => ({
-			...point,
-			x: offsetX + (x - minX) * scale,
-			y: offsetY + (y - minY) * scale,
-		}));
-		this.base = new OffscreenCanvas(this.width, this.height);
-		const baseContext = this.base.getContext('2d');
-		if (!baseContext) throw new Error('Could not create the GPS mini map.');
-		baseContext.fillStyle = 'rgba(10, 18, 16, 0.82)';
-		baseContext.beginPath();
-		baseContext.roundRect(0, 0, this.width, this.height, Math.round(this.width * 0.06));
-		baseContext.fill();
-		baseContext.lineCap = 'round';
-		baseContext.lineJoin = 'round';
-		baseContext.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-		baseContext.lineWidth = Math.max(2, this.width * 0.012);
-		baseContext.beginPath();
-		this.points.forEach((point, index) => index === 0
-			? baseContext.moveTo(point.x, point.y)
-			: baseContext.lineTo(point.x, point.y));
-		baseContext.stroke();
-
-		const firstTimestamp = input.points[0].timestamp;
-		if (firstTimestamp === null) {
-			this.startTime = null;
-		} else if (input.clipCreatedAt !== null) {
-			this.startTime = input.clipCreatedAt;
-		} else if (input.clipLocation) {
-			let nearest = input.points[0];
-			let nearestDistance = distanceSquared(input.clipLocation, nearest);
-			for (const point of input.points.slice(1)) {
-				const distance = distanceSquared(input.clipLocation, point);
-				if (distance < nearestDistance) {
-					nearest = point;
-					nearestDistance = distance;
-				}
-			}
-			this.startTime = nearest.timestamp;
-		} else {
-			this.startTime = firstTimestamp;
-		}
-	}
-
-	private pointAt(seconds: number): { point: PositionedGpsPoint; speed: number | null; upperIndex: number } | null {
-		const timed = this.startTime !== null;
-		const target = timed
-			? this.startTime! + seconds * 1000
-			: (Math.min(1, seconds / Math.max(this.input.clipDuration, 0.001)) * (this.points.length - 1));
-		const first = timed ? this.points[0].timestamp! : 0;
-		const last = timed ? this.points[this.points.length - 1].timestamp! : this.points.length - 1;
-		if (target < first || target > last) return null;
-
-		let low = 1;
-		let high = this.points.length - 1;
-		while (low < high) {
-			const middle = Math.floor((low + high) / 2);
-			if ((timed ? this.points[middle].timestamp! : middle) < target) low = middle + 1;
-			else high = middle;
-		}
-		const upper = low;
-		const before = this.points[Math.max(0, upper - 1)];
-		const after = this.points[Math.min(upper, this.points.length - 1)];
-		const beforeValue = timed ? before.timestamp! : upper - 1;
-		const afterValue = timed ? after.timestamp! : upper;
-		const ratio = afterValue === beforeValue ? 0 : (target - beforeValue) / (afterValue - beforeValue);
-		const interpolate = (a: number, b: number) => a + (b - a) * ratio;
-		let speed = before.speed ?? after.speed;
-		if (speed === null && timed && after.timestamp! > before.timestamp!) {
-			speed = distanceMetres(before, after) / ((after.timestamp! - before.timestamp!) / 1000);
-		}
-		return {
-			point: {
-				latitude: interpolate(before.latitude, after.latitude),
-				longitude: interpolate(before.longitude, after.longitude),
-				elevation: before.elevation === null || after.elevation === null
-					? before.elevation ?? after.elevation
-					: interpolate(before.elevation, after.elevation),
-				speed,
-				timestamp: timed ? target : null,
-				x: interpolate(before.x, after.x),
-				y: interpolate(before.y, after.y),
-			},
-			speed,
-			upperIndex: upper,
-		};
-	}
-
-	draw(context: OffscreenCanvasRenderingContext2D, seconds: number): void {
-		const current = this.pointAt(seconds);
-		if (!current) return;
-		context.save();
-		context.translate(this.x, this.y);
-		context.drawImage(this.base, 0, 0);
-		context.lineCap = 'round';
-		context.lineJoin = 'round';
-		context.strokeStyle = '#79d6a8';
-		context.lineWidth = Math.max(2, this.width * 0.018);
-		context.beginPath();
-		context.moveTo(this.points[0].x, this.points[0].y);
-		for (const point of this.points.slice(1, current.upperIndex)) {
-			context.lineTo(point.x, point.y);
-		}
-		context.lineTo(current.point.x, current.point.y);
-		context.stroke();
-
-		const markerRadius = Math.max(4, this.width * 0.032);
-		context.fillStyle = '#ffffff';
-		context.beginPath();
-		context.arc(current.point.x, current.point.y, markerRadius * 1.7, 0, Math.PI * 2);
-		context.fill();
-		context.fillStyle = '#e75d5d';
-		context.beginPath();
-		context.arc(current.point.x, current.point.y, markerRadius, 0, Math.PI * 2);
-		context.fill();
-
-		const fontSize = Math.max(10, Math.round(this.width * 0.075));
-		context.font = `600 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
-		context.textBaseline = 'bottom';
-		context.fillStyle = '#ffffff';
-		const labels = [
-			current.speed === null ? null : `${Math.round(current.speed * 3.6)} km/h`,
-			current.point.elevation === null ? null : `${Math.round(current.point.elevation)} m`,
-		].filter((label): label is string => Boolean(label));
-		context.fillText(labels.join('  ') || `${current.point.latitude.toFixed(5)}, ${current.point.longitude.toFixed(5)}`, this.padding, this.height - this.padding);
-		context.restore();
-	}
-}
 
 /** Splits a canonical (48 kHz stereo) sample into a transferable planar buffer. */
 const toPlanarStereo = (sample: AudioSample): Float32Array => {

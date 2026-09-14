@@ -126,61 +126,110 @@
 						</select>
 					</label>
 
-					<div class="field field-gps-file">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">⌖</span>GPS data (optional)</span>
-						<div class="row">
-							<label class="btn btn-white file-btn">
-								Choose GPS file
-								<input type="file" id="gps-file" accept=".gpx,.kml,.csv,.json,.geojson,application/gpx+xml,text/csv,application/json" />
-							</label>
-							<button id="gps-clear" class="btn btn-white hidden" type="button">Remove</button>
-						</div>
-						<span id="gps-status" class="muted small">GPX, KML, GeoJSON or CSV</span>
 					</div>
+				</section>
+			</div>
 
-					<label class="field field-gps-position">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">◰</span>Mini map position</span>
-						<select id="gps-position">
-							<option value="top-left">Top left</option>
-							<option value="top-right">Top right</option>
-							<option value="bottom-left">Bottom left</option>
-							<option value="bottom-right">Bottom right</option>
-						</select>
-					</label>
+			<div class="overlay-panels">
+				<section class="panel" id="panel-gps">
+					<h2><span class="control-icon" aria-hidden="true">⌖</span>GPS mini map <span class="pill pill-muted">Optional</span></h2>
+					<div class="gps-section">
+						<div class="gps-controls">
+							<div class="field field-gps-file">
+								<span class="field-label">GPS data file</span>
+								<div class="row">
+									<label class="btn btn-white file-btn">
+										Choose GPS file
+										<input type="file" id="gps-file" accept=".gpx,.kml,.csv,.json,.geojson,application/gpx+xml,text/csv,application/json" />
+									</label>
+									<button id="gps-clear" class="btn btn-white hidden" type="button">Remove</button>
+								</div>
+								<span id="gps-status" class="muted small">GPX, KML, GeoJSON or CSV</span>
+							</div>
+							<div class="gps-control-row">
+								<label class="field field-gps-position">
+									<span class="field-label">Position</span>
+									<select id="gps-position">
+										<option value="top-left">Top left</option>
+										<option value="top-right">Top right</option>
+										<option value="bottom-left">Bottom left</option>
+										<option value="bottom-right">Bottom right</option>
+									</select>
+								</label>
+								<label class="field field-gps-size">
+									<span class="field-label">Size (% of video width)</span>
+									<input type="number" id="gps-size" min="15" max="50" step="1" />
+								</label>
+								<label class="field field-gps-background">
+									<span class="field-label">Background</span>
+									<select id="gps-background">
+										<option value="plain">Plain</option>
+										<option value="map">Offline map</option>
+									</select>
+								</label>
+							</div>
+							<label class="field field-gps-rotation">
+								<span class="field-label">Map rotation (clockwise) <output id="gps-rotation-value" for="gps-rotation">0°</output></span>
+								<input type="range" id="gps-rotation" min="0" max="359" step="1" />
+								<span class="rotation-marks" aria-hidden="true"><span>0°</span><span>90°</span><span>180°</span><span>270°</span><span>359°</span></span>
+								<span class="muted small">The offline map background is illustrative; no map tiles are downloaded.</span>
+							</label>
+							<fieldset class="gps-info">
+								<legend>Information shown</legend>
+								<label class="check"><input type="checkbox" id="gps-show-speed" /><span>Speed</span></label>
+								<label class="check"><input type="checkbox" id="gps-show-altitude" /><span>Altitude graph</span></label>
+								<label class="check"><input type="checkbox" id="gps-show-distance" /><span>Distance</span></label>
+								<label class="check"><input type="checkbox" id="gps-show-coordinates" /><span>Coordinates</span></label>
+								<label class="check" title="Shown when the video contains recording date metadata"><input type="checkbox" id="gps-show-date-time" /><span>Date &amp; time</span></label>
+							</fieldset>
+						</div>
+						<div class="preview-block">
+							<span class="field-label">Imported route preview</span>
+							<canvas id="gps-preview" class="preview-canvas" width="640" height="360" aria-label="GPS mini map preview"></canvas>
+							<span id="gps-preview-empty" class="preview-empty">Choose a GPS file to preview its route.</span>
+						</div>
+					</div>
+				</section>
 
-					<label class="field field-title">
-						<span class="field-label"><span class="control-icon control-icon-text" aria-hidden="true">T</span>Title text</span>
-						<input type="text" id="title-text" placeholder="Shown on every frame (leave empty for none)" />
-					</label>
-
-					<label class="field field-title-position">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">⌖</span>Title position</span>
-						<select id="title-position">
-							<option value="top-left">Top left</option>
-							<option value="top-center">Top center</option>
-							<option value="top-right">Top right</option>
-							<option value="middle-left">Middle left</option>
-							<option value="middle-center">Middle center</option>
-							<option value="middle-right">Middle right</option>
-							<option value="bottom-left">Bottom left</option>
-							<option value="bottom-center">Bottom center</option>
-							<option value="bottom-right">Bottom right</option>
-						</select>
-					</label>
-
-					<label class="field field-title-color">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">●</span>Title color</span>
-						<span class="color-row">
-							<input type="color" id="title-color" aria-label="Title color picker" />
-							<input type="text" id="title-color-hex" spellcheck="false" aria-label="Title color hex value" />
-						</span>
-					</label>
-
-					<label class="field field-title-size">
-						<span class="field-label"><span class="control-icon" aria-hidden="true">↕</span>Title size (%)</span>
-						<input type="number" id="title-scale" min="2" max="30" step="0.5" />
-					</label>
-
+				<section class="panel" id="panel-overlay-preview">
+					<h2><span class="control-icon control-icon-text" aria-hidden="true">T</span>Text overlay &amp; preview</h2>
+					<div class="text-section">
+						<div class="text-controls">
+							<label class="field field-title">
+								<span class="field-label">Title text</span>
+								<input type="text" id="title-text" placeholder="Shown on every frame (leave empty for none)" />
+							</label>
+							<label class="field field-title-position">
+								<span class="field-label">Position</span>
+								<select id="title-position">
+									<option value="top-left">Top left</option>
+									<option value="top-center">Top center</option>
+									<option value="top-right">Top right</option>
+									<option value="middle-left">Middle left</option>
+									<option value="middle-center">Middle center</option>
+									<option value="middle-right">Middle right</option>
+									<option value="bottom-left">Bottom left</option>
+									<option value="bottom-center">Bottom center</option>
+									<option value="bottom-right">Bottom right</option>
+								</select>
+							</label>
+							<label class="field field-title-color">
+								<span class="field-label">Color</span>
+								<span class="color-row">
+									<input type="color" id="title-color" aria-label="Title color picker" />
+									<input type="text" id="title-color-hex" spellcheck="false" aria-label="Title color hex value" />
+								</span>
+							</label>
+							<label class="field field-title-size">
+								<span class="field-label">Size (%)</span>
+								<input type="number" id="title-scale" min="2" max="30" step="0.5" />
+							</label>
+						</div>
+						<div class="preview-block">
+							<span id="overlay-preview-label" class="muted small">16:9 preview</span>
+							<canvas id="overlay-preview" class="preview-canvas output-preview" width="640" height="360" aria-label="Title and GPS overlay preview"></canvas>
+							<span class="muted small">Follows the selected aspect ratio, title style, and GPS placement.</span>
+						</div>
 					</div>
 				</section>
 			</div>

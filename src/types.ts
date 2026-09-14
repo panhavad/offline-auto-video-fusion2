@@ -29,6 +29,7 @@ export type AccelerationMode = 'auto' | 'max' | 'balanced' | 'safe';
 /** `auto` derives the cap from the selected clips; a number is an explicit upper limit in fps. */
 export type FrameRateSetting = number | 'auto';
 export type GpsMapPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+export type GpsMapBackground = 'plain' | 'map';
 
 export interface GpsPoint {
 	latitude: number;
@@ -87,6 +88,16 @@ export interface MergeSettings {
 	preferHardware: boolean;
 	accelerationMode: AccelerationMode;
 	gpsMapPosition: GpsMapPosition;
+	/** Mini map width as a percentage of the output frame width. */
+	gpsMapSize: number;
+	/** Clockwise rotation of the map contents in degrees. */
+	gpsMapRotation: number;
+	gpsMapBackground: GpsMapBackground;
+	gpsShowSpeed: boolean;
+	gpsShowAltitude: boolean;
+	gpsShowDistance: boolean;
+	gpsShowCoordinates: boolean;
+	gpsShowDateTime: boolean;
 }
 
 export interface MergeItem {

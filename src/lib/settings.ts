@@ -2,6 +2,7 @@ import type {
 	AccelerationMode,
 	AspectRatioSetting,
 	FrameRateSetting,
+	GpsMapBackground,
 	GpsMapPosition,
 	MergeSettings,
 	ResolutionPreset,
@@ -20,6 +21,7 @@ const STABILIZER_SETTINGS: StabilizerSetting[] = ['off', 'light', 'standard', 's
 
 const ACCELERATION_MODES: AccelerationMode[] = ['auto', 'max', 'balanced', 'safe'];
 const GPS_MAP_POSITIONS: GpsMapPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+const GPS_MAP_BACKGROUNDS: GpsMapBackground[] = ['plain', 'map'];
 
 const sanitizeFrameRate = (value: unknown): FrameRateSetting => {
 	if (value === 'auto') return 'auto';
@@ -52,6 +54,21 @@ const sanitizeGpsMapPosition = (value: unknown): GpsMapPosition =>
 		? (value as GpsMapPosition)
 		: DEFAULT_SETTINGS.gpsMapPosition;
 
+const sanitizeGpsMapSize = (value: unknown): number => {
+	const numeric = Number(value);
+	return Number.isFinite(numeric) ? Math.min(50, Math.max(15, numeric)) : DEFAULT_SETTINGS.gpsMapSize;
+};
+
+const sanitizeGpsMapRotation = (value: unknown): number => {
+	const numeric = Number(value);
+	return Number.isFinite(numeric) ? ((Math.round(numeric) % 360) + 360) % 360 : DEFAULT_SETTINGS.gpsMapRotation;
+};
+
+const sanitizeGpsMapBackground = (value: unknown): GpsMapBackground =>
+	GPS_MAP_BACKGROUNDS.includes(value as GpsMapBackground)
+		? (value as GpsMapBackground)
+		: DEFAULT_SETTINGS.gpsMapBackground;
+
 export interface AppSettings extends MergeSettings {
 	sortKey: SortKey;
 	sortDirection: SortDirection;
@@ -77,6 +94,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	preferHardware: true,
 	accelerationMode: 'auto',
 	gpsMapPosition: 'bottom-left',
+	gpsMapSize: 25,
+	gpsMapRotation: 0,
+	gpsMapBackground: 'map',
+	gpsShowSpeed: true,
+	gpsShowAltitude: true,
+	gpsShowDistance: true,
+	gpsShowCoordinates: false,
+	gpsShowDateTime: false,
 	sortKey: 'name',
 	sortDirection: 'asc',
 	recursive: false,
@@ -102,6 +127,14 @@ export const loadSettings = (): AppSettings => {
 			preferHardware: DEFAULT_SETTINGS.preferHardware,
 			accelerationMode: sanitizeAcceleration(parsed.accelerationMode),
 			gpsMapPosition: sanitizeGpsMapPosition(parsed.gpsMapPosition),
+			gpsMapSize: sanitizeGpsMapSize(parsed.gpsMapSize),
+			gpsMapRotation: sanitizeGpsMapRotation(parsed.gpsMapRotation),
+			gpsMapBackground: sanitizeGpsMapBackground(parsed.gpsMapBackground),
+			gpsShowSpeed: parsed.gpsShowSpeed ?? DEFAULT_SETTINGS.gpsShowSpeed,
+			gpsShowAltitude: parsed.gpsShowAltitude ?? DEFAULT_SETTINGS.gpsShowAltitude,
+			gpsShowDistance: parsed.gpsShowDistance ?? DEFAULT_SETTINGS.gpsShowDistance,
+			gpsShowCoordinates: parsed.gpsShowCoordinates ?? DEFAULT_SETTINGS.gpsShowCoordinates,
+			gpsShowDateTime: parsed.gpsShowDateTime ?? DEFAULT_SETTINGS.gpsShowDateTime,
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS };

@@ -120,8 +120,8 @@ instead.
 | Title text / position / color / size | Text burned into every frame, at one of 9 positions. `\n` starts a second line. |
 | Frame rate | Upper limit — source frames are never duplicated to reach it. *Auto* (default) matches the fastest selected clip, or falls back to a 120 fps limit when no source rate can be detected. |
 | Stabilizer | Software stabilization applied automatically to **every** clip. *Off* (default) skips it entirely; *Light* / *Standard* / *Strong* trade an increasing crop for an increasingly steady picture. See [Stabilization](#stabilization). |
-| GPS data | Optional GPX, KML, GeoJSON or CSV track. When supplied, an offline vector mini map with the current position, speed and elevation is burned into the video. Timestamped tracks align to each video's creation metadata; embedded video coordinates are used as a fallback anchor. |
-| Mini map position | Places the GPS overlay in any corner of the output frame. |
+| GPS mini map | A separate optional GPS section accepts GPX, KML, GeoJSON or CSV and previews the imported route before merging. Timestamped tracks align to each video's creation metadata; embedded video coordinates are used as a fallback anchor. |
+| Mini map display | Places the overlay in any corner, sizes it from 15–50% of the video width, rotates it through 0–359°, chooses a plain or illustrative offline-map background, and independently shows or hides speed, altitude profile, traveled distance, coordinates, and the video's date and time. |
 | Acceleration | How much of the machine the merge may use. *Auto* (default) sizes the pipeline from the detected GPU, core count and memory; *Maximum* pushes further on a workstation; *Balanced* leaves headroom for other work; *Compatibility* falls back to the strictly sequential pipeline. The detected GPU is written to the log when the app starts. |
 
 With both frame controls on *auto* the output is exactly the first clip's frame, and clips of a
@@ -137,7 +137,16 @@ encoding and falls back to software automatically when hardware encoding is not 
 GPS CSV files need `latitude` and `longitude` columns and may also include `time`/`timestamp`,
 `elevation` and `speed` (metres per second). A timestamped point must have a timestamp on every row.
 Untimed routes are advanced across each clip by relative progress. The mini map uses no online map
-tiles, so GPS rendering remains private and works offline.
+tiles, so GPS rendering remains private and works offline. Its built-in cartographic background adds
+illustrative streets, blocks, water and a rotating north indicator for visual route context; it is
+not live road data. Enabling *Altitude graph* adds the complete elevation profile under the route,
+with a moving progress marker and the current interpolated altitude. Enabling *Date & time* shows
+the video's recording time and advances it with each frame when creation metadata is available.
+
+The **Text overlay & preview** section keeps title text, position, color and size beside the live
+preview. The preview follows the selected aspect ratio (or the first eligible clip in *Auto*).
+When GPS data is loaded it also shows the selected mini map size, corner and information fields in
+the same output frame.
 
 **3 · Review the clips.** Each clip is probed in a worker: resolution, orientation, duration, dates
 and a decoded thumbnail. Sort by name, modified or created date (ascending/descending) — **the list

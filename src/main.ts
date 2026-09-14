@@ -1,10 +1,12 @@
 import { formatBytes, formatClock, formatDate, formatDuration, timestampSlug } from './lib/format';
 import { formatFrameRate, resolveFrameRate } from './lib/framerate';
 import { parseGpsFile } from './lib/gps';
+import { GpsMiniMap } from './lib/gps-map';
 import { describeHardware, detectHardware } from './lib/hardware';
-import { formatSize, isCropped, resolveFitMode, resolveOutputSize } from './lib/resolution';
+import { formatSize, isCropped, parseAspectRatio, resolveFitMode, resolveOutputSize } from './lib/resolution';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type AppSettings } from './lib/settings';
 import { STABILIZER_LABELS } from './lib/stabilizer';
+import { renderTitleOverlay } from './lib/title-overlay';
 import type {
 	MergeItem,
 	MergeProgress,
@@ -75,6 +77,19 @@ const ui = {
 	gpsClear: el<HTMLButtonElement>('gps-clear'),
 	gpsStatus: el<HTMLSpanElement>('gps-status'),
 	gpsPosition: el<HTMLSelectElement>('gps-position'),
+	gpsSize: el<HTMLInputElement>('gps-size'),
+	gpsBackground: el<HTMLSelectElement>('gps-background'),
+	gpsRotation: el<HTMLInputElement>('gps-rotation'),
+	gpsRotationValue: el<HTMLOutputElement>('gps-rotation-value'),
+	gpsShowSpeed: el<HTMLInputElement>('gps-show-speed'),
+	gpsShowAltitude: el<HTMLInputElement>('gps-show-altitude'),
+	gpsShowDistance: el<HTMLInputElement>('gps-show-distance'),
+	gpsShowCoordinates: el<HTMLInputElement>('gps-show-coordinates'),
+	gpsShowDateTime: el<HTMLInputElement>('gps-show-date-time'),
+	gpsPreview: el<HTMLCanvasElement>('gps-preview'),
+	gpsPreviewEmpty: el<HTMLSpanElement>('gps-preview-empty'),
+	overlayPreview: el<HTMLCanvasElement>('overlay-preview'),
+	overlayPreviewLabel: el<HTMLSpanElement>('overlay-preview-label'),
 	clipCount: el<HTMLSpanElement>('clip-count'),
 	sortKey: el<HTMLSelectElement>('sort-key'),
 	sortDir: el<HTMLButtonElement>('sort-dir'),
@@ -190,6 +205,15 @@ const applySettingsToForm = () => {
 	ui.acceleration.value = settings.accelerationMode;
 	ui.stabilize.value = settings.stabilize;
 	ui.gpsPosition.value = settings.gpsMapPosition;
+	ui.gpsSize.value = String(settings.gpsMapSize);
+	ui.gpsBackground.value = settings.gpsMapBackground;
+	ui.gpsRotation.value = String(settings.gpsMapRotation);
+	ui.gpsRotationValue.value = `${settings.gpsMapRotation}°`;
+	ui.gpsShowSpeed.checked = settings.gpsShowSpeed;
+	ui.gpsShowAltitude.checked = settings.gpsShowAltitude;
+	ui.gpsShowDistance.checked = settings.gpsShowDistance;
+	ui.gpsShowCoordinates.checked = settings.gpsShowCoordinates;
+	ui.gpsShowDateTime.checked = settings.gpsShowDateTime;
 	ui.sortKey.value = settings.sortKey;
 	ui.recursive.checked = settings.recursive;
 	updateSortButton();
@@ -209,6 +233,15 @@ const readSettingsFromForm = () => {
 	settings.accelerationMode = ui.acceleration.value as AppSettings['accelerationMode'];
 	settings.stabilize = ui.stabilize.value as AppSettings['stabilize'];
 	settings.gpsMapPosition = ui.gpsPosition.value as AppSettings['gpsMapPosition'];
+	settings.gpsMapSize = Math.min(50, Math.max(15, Number(ui.gpsSize.value) || DEFAULT_SETTINGS.gpsMapSize));
+	settings.gpsMapBackground = ui.gpsBackground.value as AppSettings['gpsMapBackground'];
+	settings.gpsMapRotation = ((Math.round(Number(ui.gpsRotation.value)) % 360) + 360) % 360;
+	ui.gpsRotationValue.value = `${settings.gpsMapRotation}°`;
+	settings.gpsShowSpeed = ui.gpsShowSpeed.checked;
+	settings.gpsShowAltitude = ui.gpsShowAltitude.checked;
+	settings.gpsShowDistance = ui.gpsShowDistance.checked;
+	settings.gpsShowCoordinates = ui.gpsShowCoordinates.checked;
+	settings.gpsShowDateTime = ui.gpsShowDateTime.checked;
 	settings.sortKey = ui.sortKey.value as SortKey;
 	settings.recursive = ui.recursive.checked;
 	saveSettings(settings);
@@ -236,6 +269,14 @@ const mergeSettings = (): MergeSettings => ({
 	preferHardware: settings.preferHardware,
 	accelerationMode: settings.accelerationMode,
 	gpsMapPosition: settings.gpsMapPosition,
+	gpsMapSize: settings.gpsMapSize,
+	gpsMapBackground: settings.gpsMapBackground,
+	gpsMapRotation: settings.gpsMapRotation,
+	gpsShowSpeed: settings.gpsShowSpeed,
+	gpsShowAltitude: settings.gpsShowAltitude,
+	gpsShowDistance: settings.gpsShowDistance,
+	gpsShowCoordinates: settings.gpsShowCoordinates,
+	gpsShowDateTime: settings.gpsShowDateTime,
 });
 
 // ---------------------------------------------------------------------------
@@ -280,6 +321,99 @@ const sortedEntries = (): ClipEntry[] => {
 		if (result === 0) result = a.path.localeCompare(b.path, undefined, { numeric: true });
 		return result * direction;
 	});
+};
+
+const previewGpsInput = (position = settings.gpsMapPosition, size = settings.gpsMapSize) => {
+	if (!gpsTrack) return null;
+	const firstTime = gpsTrack.points[0].timestamp;
+	const lastTime = gpsTrack.points[gpsTrack.points.length - 1].timestamp;
+	const duration = firstTime !== null && lastTime !== null
+		? Math.max(1, (lastTime - firstTime) / 1000)
+		: 10;
+	return {
+		points: gpsTrack.points,
+		clipCreatedAt: firstTime,
+		clipLocation: null,
+		clipDuration: duration,
+		position,
+		size,
+		background: settings.gpsMapBackground,
+		rotation: settings.gpsMapRotation,
+		showSpeed: settings.gpsShowSpeed,
+		showAltitude: settings.gpsShowAltitude,
+		showDistance: settings.gpsShowDistance,
+		showCoordinates: settings.gpsShowCoordinates,
+		showDateTime: settings.gpsShowDateTime,
+	};
+};
+
+const drawPreviewBackground = (canvas: HTMLCanvasElement, label: string): CanvasRenderingContext2D | null => {
+	const context = canvas.getContext('2d');
+	if (!context) return null;
+	const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
+	gradient.addColorStop(0, '#32463e');
+	gradient.addColorStop(1, '#15201c');
+	context.fillStyle = gradient;
+	context.fillRect(0, 0, canvas.width, canvas.height);
+	context.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+	context.lineWidth = 1;
+	for (let x = 0; x < canvas.width; x += Math.max(32, canvas.width / 12)) {
+		context.beginPath();
+		context.moveTo(x, 0);
+		context.lineTo(x, canvas.height);
+		context.stroke();
+	}
+	for (let y = 0; y < canvas.height; y += Math.max(32, canvas.height / 8)) {
+		context.beginPath();
+		context.moveTo(0, y);
+		context.lineTo(canvas.width, y);
+		context.stroke();
+	}
+	context.fillStyle = 'rgba(255, 255, 255, 0.42)';
+	context.font = `600 ${Math.max(12, Math.round(canvas.height * 0.035))}px "Segoe UI", system-ui, sans-serif`;
+	context.textBaseline = 'top';
+	context.fillText(label, Math.round(canvas.width * 0.025), Math.round(canvas.height * 0.025));
+	return context;
+};
+
+const drawGpsAtMidpoint = (
+	context: CanvasRenderingContext2D,
+	width: number,
+	height: number,
+	position = settings.gpsMapPosition,
+	size = settings.gpsMapSize,
+) => {
+	const input = previewGpsInput(position, size);
+	if (!input) return;
+	new GpsMiniMap(input, width, height).draw(context, input.clipDuration / 2);
+};
+
+const updateOverlayPreviews = () => {
+	const forcedRatio = parseAspectRatio(settings.aspectRatio);
+	const firstClip = sortedEntries().find(isEligible)?.probe;
+	const ratio = forcedRatio ??
+		(firstClip && firstClip.width > 0 && firstClip.height > 0
+			? firstClip.width / firstClip.height
+			: settings.orientation === 'portrait' ? 9 / 16 : 16 / 9);
+	const previewLongEdge = 640;
+	const outputWidth = ratio >= 1 ? previewLongEdge : Math.round(previewLongEdge * ratio);
+	const outputHeight = ratio >= 1 ? Math.round(previewLongEdge / ratio) : previewLongEdge;
+	ui.overlayPreview.width = outputWidth;
+	ui.overlayPreview.height = outputHeight;
+	ui.overlayPreviewLabel.textContent =
+		`${settings.aspectRatio === 'auto' ? 'Auto' : settings.aspectRatio} preview · ${outputWidth}×${outputHeight}`;
+	const outputContext = drawPreviewBackground(ui.overlayPreview, 'VIDEO PREVIEW');
+	if (outputContext) {
+		const title = renderTitleOverlay(mergeSettings(), outputWidth, outputHeight);
+		if (title) outputContext.drawImage(title.canvas, title.x, title.y);
+		drawGpsAtMidpoint(outputContext, outputWidth, outputHeight);
+	}
+
+	const gpsContext = drawPreviewBackground(ui.gpsPreview, 'GPS MINI MAP PREVIEW');
+	ui.gpsPreviewEmpty.classList.toggle('hidden', Boolean(gpsTrack));
+	if (gpsContext && gpsTrack) {
+		drawGpsAtMidpoint(gpsContext, ui.gpsPreview.width, ui.gpsPreview.height);
+	}
 };
 
 // ---------------------------------------------------------------------------
@@ -398,6 +532,7 @@ const render = () => {
 	ui.clipEmpty.classList.toggle('hidden', entries.length > 0);
 	ui.clipCount.textContent = `${order} / ${entries.length}`;
 	updateSummary();
+	updateOverlayPreviews();
 };
 
 const updateSummary = () => {
@@ -606,6 +741,14 @@ const setBusy = (busy: boolean) => {
 		ui.gpsFile,
 		ui.gpsClear,
 		ui.gpsPosition,
+		ui.gpsSize,
+		ui.gpsBackground,
+		ui.gpsRotation,
+		ui.gpsShowSpeed,
+		ui.gpsShowAltitude,
+		ui.gpsShowDistance,
+		ui.gpsShowCoordinates,
+		ui.gpsShowDateTime,
 		ui.sortKey,
 		ui.sortDir,
 		ui.selectAll,
@@ -1009,11 +1152,26 @@ for (const control of [
 	ui.acceleration,
 	ui.stabilize,
 	ui.gpsPosition,
+	ui.gpsSize,
+	ui.gpsBackground,
+	ui.gpsRotation,
+	ui.gpsShowSpeed,
+	ui.gpsShowAltitude,
+	ui.gpsShowDistance,
+	ui.gpsShowCoordinates,
+	ui.gpsShowDateTime,
 	ui.recursive,
 ]) {
 	control.addEventListener('change', () => {
 		readSettingsFromForm();
 		render();
+	});
+}
+
+for (const control of [ui.titleText, ui.titleScale, ui.gpsSize, ui.gpsRotation]) {
+	control.addEventListener('input', () => {
+		readSettingsFromForm();
+		updateOverlayPreviews();
 	});
 }
 
@@ -1056,6 +1214,7 @@ ui.gpsClear.addEventListener('click', () => {
 ui.titleColor.addEventListener('input', () => {
 	ui.titleColorHex.value = ui.titleColor.value.toUpperCase();
 	readSettingsFromForm();
+	updateOverlayPreviews();
 });
 
 ui.titleColorHex.addEventListener('change', () => {
@@ -1063,6 +1222,7 @@ ui.titleColorHex.addEventListener('change', () => {
 	if (/^#[0-9a-f]{6}$/i.test(value)) {
 		ui.titleColor.value = value;
 		readSettingsFromForm();
+		updateOverlayPreviews();
 	} else {
 		ui.titleColorHex.value = ui.titleColor.value.toUpperCase();
 	}
