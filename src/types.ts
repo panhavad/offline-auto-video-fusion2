@@ -21,6 +21,8 @@ export type AspectRatioSetting = 'auto' | '16:9' | '9:16' | '4:3' | '3:4' | '1:1
 export type QualityPreset = 'high' | 'medium' | 'low';
 /** Strength of the software (optical-flow) stabilizer; `off` skips the analysis pass entirely. */
 export type StabilizerSetting = 'off' | 'light' | 'standard' | 'strong';
+/** How automatically detected faces are obscured; `off` skips face detection entirely. */
+export type FaceBlurSetting = 'off' | 'blur' | 'strong' | 'pixelate';
 /**
  * How much of the machine the merge pipeline may use. `auto` scales with the detected CPU/GPU,
  * `max` pushes every core into the pipeline, and `safe` falls back to the single-threaded pipeline.
@@ -30,6 +32,7 @@ export type AccelerationMode = 'auto' | 'max' | 'balanced' | 'safe';
 export type FrameRateSetting = number | 'auto';
 export type GpsMapPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 export type GpsMapBackground = 'plain' | 'map';
+export type GpsInfoItem = 'altitude' | 'distance' | 'date-time' | 'speed' | 'coordinates';
 
 export interface GpsPoint {
 	latitude: number;
@@ -84,6 +87,7 @@ export interface MergeSettings {
 	quality: QualityPreset;
 	frameRate: FrameRateSetting;
 	stabilize: StabilizerSetting;
+	faceBlur: FaceBlurSetting;
 	includeAudio: boolean;
 	preferHardware: boolean;
 	accelerationMode: AccelerationMode;
@@ -93,6 +97,9 @@ export interface MergeSettings {
 	/** Clockwise rotation of the map contents in degrees. */
 	gpsMapRotation: number;
 	gpsMapBackground: GpsMapBackground;
+	/** Opacity of the complete mini-map overlay as a percentage. */
+	gpsMapOpacity: number;
+	gpsInfoOrder: GpsInfoItem[];
 	gpsShowSpeed: boolean;
 	gpsShowAltitude: boolean;
 	gpsShowDistance: boolean;

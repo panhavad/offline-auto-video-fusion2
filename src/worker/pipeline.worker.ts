@@ -678,6 +678,7 @@ async function runMerge(request: MergeRequest): Promise<void> {
 			wantAudio: Boolean(audioSource) && !audioBroken,
 			preferHardware: plan.preferHardware,
 			stabilize: settings.stabilize,
+			faceBlur: settings.faceBlur,
 			gps: gpsTrack
 				? {
 						points: gpsTrack.points,
@@ -687,7 +688,9 @@ async function runMerge(request: MergeRequest): Promise<void> {
 						position: settings.gpsMapPosition,
 						size: settings.gpsMapSize,
 						background: settings.gpsMapBackground,
+						opacity: settings.gpsMapOpacity,
 						rotation: settings.gpsMapRotation,
+						informationOrder: settings.gpsInfoOrder,
 						showSpeed: settings.gpsShowSpeed,
 						showAltitude: settings.gpsShowAltitude,
 						showDistance: settings.gpsShowDistance,

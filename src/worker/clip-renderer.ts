@@ -10,6 +10,7 @@
 import { ALL_FORMATS, AudioSampleSink, BlobSource, CanvasSink, Input, VideoSampleSink } from 'mediabunny';
 import type { AudioSample, InputVideoTrack, VideoSinkDecoderOptions } from 'mediabunny';
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, AudioNormalizer } from '../lib/audio';
+import { FaceBlurrer, faceBlurPreset, loadFaceClassifier } from '../lib/face-blur';
 import { GpsMiniMap, type GpsOverlayInput } from '../lib/gps-map';
 import {
 	ANALYSIS_LONG_EDGE,
@@ -21,7 +22,7 @@ import {
 	type StabilizerPlan,
 	type StabilizerPreset,
 } from '../lib/stabilizer';
-import type { FitMode, StabilizerSetting } from '../types';
+import type { FaceBlurSetting, FitMode, StabilizerSetting } from '../types';
 
 export interface ClipRenderJob {
 	file: File;
@@ -38,6 +39,8 @@ export interface ClipRenderJob {
 	preferHardware: boolean;
 	/** Strength of the software stabilizer, or `off` to skip the motion analysis pass. */
 	stabilize: StabilizerSetting;
+	/** How automatically detected faces are obscured, or `off` to skip face detection. */
+	faceBlur: FaceBlurSetting;
 	overlay: ImageBitmap | null;
 	overlayX: number;
 	overlayY: number;
@@ -134,6 +137,7 @@ export async function renderClip(
 	const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 	if (!ctx) throw new Error('Could not create a 2D rendering context.');
 	const gpsMap = job.gps ? new GpsMiniMap(job.gps, job.width, job.height) : null;
+	let faceBlurrer: FaceBlurrer | null = null;
 
 	const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(job.file) });
 	try {
@@ -169,6 +173,27 @@ export async function renderClip(
 				sink.log(
 					`Stabilizer unavailable (${errorMessage(error)}); this clip is merged unstabilized.`,
 					'warn',
+				);
+			}
+		}
+
+		const blurPreset = faceBlurPreset(job.faceBlur);
+		if (blurPreset && !isCanceled()) {
+			try {
+				const cv = await loadOpenCv();
+				faceBlurrer = new FaceBlurrer(
+					cv,
+					await loadFaceClassifier(cv),
+					blurPreset,
+					job.width,
+					job.height,
+				);
+			} catch (error) {
+				// Never lose the clip over this, but say so loudly: the user asked for faces to be
+				// hidden, and silently merging them in the clear would be the worst outcome here.
+				sink.log(
+					`Face detection unavailable (${errorMessage(error)}); faces in this clip are NOT obscured.`,
+					'error',
 				);
 			}
 		}
@@ -219,6 +244,9 @@ export async function renderClip(
 					sample.drawWithFit(ctx, { fit: job.fit });
 				}
 				sample.close();
+				// Faces are hidden before anything is drawn on top, so the title and the mini map
+				// stay sharp and can never be smeared by a detection that overlaps them.
+				faceBlurrer?.apply(canvas, ctx);
 				if (job.overlay) ctx.drawImage(job.overlay, job.overlayX, job.overlayY);
 
 				const timestamp = Math.max(0, relative);
@@ -303,6 +331,7 @@ export async function renderClip(
 
 		return { videoEnd: videoResult.value, audioEnd, framesEmitted };
 	} finally {
+		faceBlurrer?.dispose();
 		input.dispose();
 	}
 }

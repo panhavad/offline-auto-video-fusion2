@@ -1,6 +1,7 @@
 import { formatBytes, formatClock, formatDate, formatDuration, timestampSlug } from './lib/format';
 import { formatFrameRate, resolveFrameRate } from './lib/framerate';
 import { parseGpsFile } from './lib/gps';
+import { FACE_BLUR_LABELS } from './lib/face-blur';
 import { GpsMiniMap } from './lib/gps-map';
 import { describeHardware, detectHardware } from './lib/hardware';
 import { formatSize, isCropped, parseAspectRatio, resolveFitMode, resolveOutputSize } from './lib/resolution';
@@ -73,6 +74,7 @@ const ui = {
 	frameRate: el<HTMLSelectElement>('frame-rate'),
 	acceleration: el<HTMLSelectElement>('acceleration'),
 	stabilize: el<HTMLSelectElement>('stabilize'),
+	faceBlur: el<HTMLSelectElement>('face-blur'),
 	gpsFile: el<HTMLInputElement>('gps-file'),
 	gpsClear: el<HTMLButtonElement>('gps-clear'),
 	gpsStatus: el<HTMLSpanElement>('gps-status'),
@@ -81,15 +83,19 @@ const ui = {
 	gpsBackground: el<HTMLSelectElement>('gps-background'),
 	gpsRotation: el<HTMLInputElement>('gps-rotation'),
 	gpsRotationValue: el<HTMLOutputElement>('gps-rotation-value'),
+	gpsOpacity: el<HTMLInputElement>('gps-opacity'),
+	gpsOpacityValue: el<HTMLOutputElement>('gps-opacity-value'),
+	gpsInfoList: el<HTMLDivElement>('gps-info-list'),
 	gpsShowSpeed: el<HTMLInputElement>('gps-show-speed'),
 	gpsShowAltitude: el<HTMLInputElement>('gps-show-altitude'),
 	gpsShowDistance: el<HTMLInputElement>('gps-show-distance'),
 	gpsShowCoordinates: el<HTMLInputElement>('gps-show-coordinates'),
 	gpsShowDateTime: el<HTMLInputElement>('gps-show-date-time'),
-	gpsPreview: el<HTMLCanvasElement>('gps-preview'),
-	gpsPreviewEmpty: el<HTMLSpanElement>('gps-preview-empty'),
+	overlayPreviewBlock: el<HTMLDivElement>('overlay-preview-block'),
+	overlayPreviewFullscreen: el<HTMLButtonElement>('overlay-preview-fullscreen'),
 	overlayPreview: el<HTMLCanvasElement>('overlay-preview'),
 	overlayPreviewLabel: el<HTMLSpanElement>('overlay-preview-label'),
+	overlayPreviewNote: el<HTMLSpanElement>('overlay-preview-note'),
 	clipCount: el<HTMLSpanElement>('clip-count'),
 	sortKey: el<HTMLSelectElement>('sort-key'),
 	sortDir: el<HTMLButtonElement>('sort-dir'),
@@ -191,6 +197,20 @@ const addLog = (message: string, level: 'info' | 'warn' | 'error' | 'ok' = 'info
 // Settings <-> form
 // ---------------------------------------------------------------------------
 
+const renderGpsInfoOrder = () => {
+	for (const item of settings.gpsInfoOrder) {
+		const row = ui.gpsInfoList.querySelector<HTMLElement>(`[data-gps-info="${item}"]`);
+		if (row) ui.gpsInfoList.append(row);
+	}
+	const rows = [...ui.gpsInfoList.querySelectorAll<HTMLElement>('.gps-info-item')];
+	rows.forEach((row, index) => {
+		const up = row.querySelector<HTMLButtonElement>('[data-direction="up"]');
+		const down = row.querySelector<HTMLButtonElement>('[data-direction="down"]');
+		if (up) up.disabled = index === 0 || merging;
+		if (down) down.disabled = index === rows.length - 1 || merging;
+	});
+};
+
 const applySettingsToForm = () => {
 	ui.orientation.value = settings.orientation;
 	ui.maxClip.value = String(settings.maxClipSeconds);
@@ -204,16 +224,20 @@ const applySettingsToForm = () => {
 	ui.frameRate.value = settings.frameRate === 'auto' ? 'auto' : String(settings.frameRate);
 	ui.acceleration.value = settings.accelerationMode;
 	ui.stabilize.value = settings.stabilize;
+	ui.faceBlur.value = settings.faceBlur;
 	ui.gpsPosition.value = settings.gpsMapPosition;
 	ui.gpsSize.value = String(settings.gpsMapSize);
 	ui.gpsBackground.value = settings.gpsMapBackground;
 	ui.gpsRotation.value = String(settings.gpsMapRotation);
 	ui.gpsRotationValue.value = `${settings.gpsMapRotation}°`;
+	ui.gpsOpacity.value = String(settings.gpsMapOpacity);
+	ui.gpsOpacityValue.value = `${settings.gpsMapOpacity}%`;
 	ui.gpsShowSpeed.checked = settings.gpsShowSpeed;
 	ui.gpsShowAltitude.checked = settings.gpsShowAltitude;
 	ui.gpsShowDistance.checked = settings.gpsShowDistance;
 	ui.gpsShowCoordinates.checked = settings.gpsShowCoordinates;
 	ui.gpsShowDateTime.checked = settings.gpsShowDateTime;
+	renderGpsInfoOrder();
 	ui.sortKey.value = settings.sortKey;
 	ui.recursive.checked = settings.recursive;
 	updateSortButton();
@@ -232,11 +256,14 @@ const readSettingsFromForm = () => {
 		ui.frameRate.value === 'auto' ? 'auto' : Number(ui.frameRate.value) || DEFAULT_SETTINGS.frameRate;
 	settings.accelerationMode = ui.acceleration.value as AppSettings['accelerationMode'];
 	settings.stabilize = ui.stabilize.value as AppSettings['stabilize'];
+	settings.faceBlur = ui.faceBlur.value as AppSettings['faceBlur'];
 	settings.gpsMapPosition = ui.gpsPosition.value as AppSettings['gpsMapPosition'];
 	settings.gpsMapSize = Math.min(50, Math.max(15, Number(ui.gpsSize.value) || DEFAULT_SETTINGS.gpsMapSize));
 	settings.gpsMapBackground = ui.gpsBackground.value as AppSettings['gpsMapBackground'];
 	settings.gpsMapRotation = ((Math.round(Number(ui.gpsRotation.value)) % 360) + 360) % 360;
 	ui.gpsRotationValue.value = `${settings.gpsMapRotation}°`;
+	settings.gpsMapOpacity = Math.min(100, Math.max(10, Math.round(Number(ui.gpsOpacity.value)) || DEFAULT_SETTINGS.gpsMapOpacity));
+	ui.gpsOpacityValue.value = `${settings.gpsMapOpacity}%`;
 	settings.gpsShowSpeed = ui.gpsShowSpeed.checked;
 	settings.gpsShowAltitude = ui.gpsShowAltitude.checked;
 	settings.gpsShowDistance = ui.gpsShowDistance.checked;
@@ -265,6 +292,7 @@ const mergeSettings = (): MergeSettings => ({
 	quality: settings.quality,
 	frameRate: settings.frameRate,
 	stabilize: settings.stabilize,
+	faceBlur: settings.faceBlur,
 	includeAudio: settings.includeAudio,
 	preferHardware: settings.preferHardware,
 	accelerationMode: settings.accelerationMode,
@@ -272,6 +300,8 @@ const mergeSettings = (): MergeSettings => ({
 	gpsMapSize: settings.gpsMapSize,
 	gpsMapBackground: settings.gpsMapBackground,
 	gpsMapRotation: settings.gpsMapRotation,
+	gpsMapOpacity: settings.gpsMapOpacity,
+	gpsInfoOrder: settings.gpsInfoOrder,
 	gpsShowSpeed: settings.gpsShowSpeed,
 	gpsShowAltitude: settings.gpsShowAltitude,
 	gpsShowDistance: settings.gpsShowDistance,
@@ -338,7 +368,9 @@ const previewGpsInput = (position = settings.gpsMapPosition, size = settings.gps
 		position,
 		size,
 		background: settings.gpsMapBackground,
+		opacity: settings.gpsMapOpacity,
 		rotation: settings.gpsMapRotation,
+		informationOrder: settings.gpsInfoOrder,
 		showSpeed: settings.gpsShowSpeed,
 		showAltitude: settings.gpsShowAltitude,
 		showDistance: settings.gpsShowDistance,
@@ -409,11 +441,9 @@ const updateOverlayPreviews = () => {
 		drawGpsAtMidpoint(outputContext, outputWidth, outputHeight);
 	}
 
-	const gpsContext = drawPreviewBackground(ui.gpsPreview, 'GPS MINI MAP PREVIEW');
-	ui.gpsPreviewEmpty.classList.toggle('hidden', Boolean(gpsTrack));
-	if (gpsContext && gpsTrack) {
-		drawGpsAtMidpoint(gpsContext, ui.gpsPreview.width, ui.gpsPreview.height);
-	}
+	ui.overlayPreviewNote.textContent = gpsTrack
+		? 'Shows the title style and the mini map at the route midpoint.'
+		: 'Shows the title style. Add a GPS file to preview the mini map here too.';
 };
 
 // ---------------------------------------------------------------------------
@@ -571,6 +601,7 @@ const updateSummary = () => {
 			`${cropped > 0 ? ` · ${cropped} will be cropped to fit` : ''}` +
 			` · ${settings.frameRate === 'auto' ? `auto ${formatFrameRate(resolvedFps)}` : formatFrameRate(resolvedFps)}` +
 			`${settings.stabilize === 'off' ? '' : ` · ${STABILIZER_LABELS[settings.stabilize]} stabilization`}` +
+			`${settings.faceBlur === 'off' ? '' : ` · ${FACE_BLUR_LABELS[settings.faceBlur]}`}` +
 			`${gpsTrack ? ` · GPS mini map (${gpsTrack.points.length} points)` : ''}` +
 			`${probing ? ' · still reading metadata…' : ''}` +
 			` · order: ${settings.sortKey} ${settings.sortDirection === 'asc' ? '↑' : '↓'}`;
@@ -738,12 +769,14 @@ const setBusy = (busy: boolean) => {
 		ui.frameRate,
 		ui.acceleration,
 		ui.stabilize,
+		ui.faceBlur,
 		ui.gpsFile,
 		ui.gpsClear,
 		ui.gpsPosition,
 		ui.gpsSize,
 		ui.gpsBackground,
 		ui.gpsRotation,
+		ui.gpsOpacity,
 		ui.gpsShowSpeed,
 		ui.gpsShowAltitude,
 		ui.gpsShowDistance,
@@ -756,6 +789,7 @@ const setBusy = (busy: boolean) => {
 		ui.folderInput,
 	];
 	for (const control of controls) (control as HTMLInputElement).disabled = busy;
+	renderGpsInfoOrder();
 	ui.start.classList.toggle('hidden', busy);
 	ui.cancel.classList.toggle('hidden', !busy);
 	ui.cancel.disabled = false;
@@ -1151,10 +1185,12 @@ for (const control of [
 	ui.frameRate,
 	ui.acceleration,
 	ui.stabilize,
+	ui.faceBlur,
 	ui.gpsPosition,
 	ui.gpsSize,
 	ui.gpsBackground,
 	ui.gpsRotation,
+	ui.gpsOpacity,
 	ui.gpsShowSpeed,
 	ui.gpsShowAltitude,
 	ui.gpsShowDistance,
@@ -1168,11 +1204,66 @@ for (const control of [
 	});
 }
 
-for (const control of [ui.titleText, ui.titleScale, ui.gpsSize, ui.gpsRotation]) {
+for (const control of [ui.titleText, ui.titleScale, ui.gpsSize, ui.gpsRotation, ui.gpsOpacity]) {
 	control.addEventListener('input', () => {
 		readSettingsFromForm();
 		updateOverlayPreviews();
 	});
+}
+
+ui.gpsInfoList.addEventListener('click', (event) => {
+	const target = event.target;
+	if (!(target instanceof Element)) return;
+	const button = target.closest<HTMLButtonElement>('.gps-order-button');
+	const row = button?.closest<HTMLElement>('.gps-info-item');
+	const item = settings.gpsInfoOrder.find((candidate) => candidate === row?.dataset.gpsInfo);
+	if (!button || !item) return;
+	const index = settings.gpsInfoOrder.indexOf(item);
+	const offset = button.dataset.direction === 'up' ? -1 : 1;
+	const destination = index + offset;
+	if (destination < 0 || destination >= settings.gpsInfoOrder.length) return;
+	[settings.gpsInfoOrder[index], settings.gpsInfoOrder[destination]] = [
+		settings.gpsInfoOrder[destination],
+		settings.gpsInfoOrder[index],
+	];
+	renderGpsInfoOrder();
+	saveSettings(settings);
+	updateOverlayPreviews();
+});
+
+const togglePreviewFullscreen = async (block: HTMLElement): Promise<void> => {
+	if (document.fullscreenElement === block) {
+		await document.exitFullscreen();
+		return;
+	}
+	await block.requestFullscreen();
+};
+
+const updateFullscreenButtons = () => {
+	ui.overlayPreviewFullscreen.textContent =
+		document.fullscreenElement === ui.overlayPreviewBlock ? 'Exit full screen' : 'Full screen';
+};
+
+const bindFullscreenPreview = (
+	block: HTMLElement,
+	canvas: HTMLCanvasElement,
+	button: HTMLButtonElement,
+) => {
+	const toggle = () => {
+		void togglePreviewFullscreen(block).catch((error) => {
+			addLog(`Could not open full-screen preview: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+		});
+	};
+	button.addEventListener('click', toggle);
+	canvas.addEventListener('click', toggle);
+};
+
+if (document.fullscreenEnabled) {
+	bindFullscreenPreview(ui.overlayPreviewBlock, ui.overlayPreview, ui.overlayPreviewFullscreen);
+	document.addEventListener('fullscreenchange', updateFullscreenButtons);
+} else {
+	ui.overlayPreviewFullscreen.disabled = true;
+	ui.overlayPreview.style.cursor = 'default';
 }
 
 ui.gpsFile.addEventListener('change', () => {

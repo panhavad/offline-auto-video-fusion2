@@ -1,4 +1,4 @@
-import type { GeoPoint, GpsMapBackground, GpsMapPosition, GpsPoint } from '../types';
+import type { GeoPoint, GpsInfoItem, GpsMapBackground, GpsMapPosition, GpsPoint } from '../types';
 
 export interface GpsOverlayInput {
 	points: GpsPoint[];
@@ -8,7 +8,9 @@ export interface GpsOverlayInput {
 	position: GpsMapPosition;
 	size: number;
 	background: GpsMapBackground;
+	opacity: number;
 	rotation: number;
+	informationOrder: GpsInfoItem[];
 	showSpeed: boolean;
 	showAltitude: boolean;
 	showDistance: boolean;
@@ -57,27 +59,27 @@ export class GpsMiniMap {
 	private readonly y: number;
 	private readonly padding: number;
 	private readonly base: OffscreenCanvas;
-	private readonly hasTextInformation: boolean;
 	private readonly altitudeGraph: AltitudeGraph | null;
-	private readonly informationLineCount: number;
+	private readonly informationRows = new Map<Exclude<GpsInfoItem, 'altitude'>, number>();
 
 	constructor(
 		private readonly input: GpsOverlayInput,
 		frameWidth: number,
 		frameHeight: number,
 	) {
-		const hasDateTime = input.showDateTime && input.clipCreatedAt !== null;
-		this.informationLineCount =
-			(input.showSpeed || input.showDistance ? 1 : 0) +
-			(input.showCoordinates ? 1 : 0) +
-			(hasDateTime ? 1 : 0);
-		this.hasTextInformation = this.informationLineCount > 0;
 		const hasAltitudeGraph = input.showAltitude && input.points.some((point) => point.elevation !== null);
-		const footerRatio = this.hasTextInformation
-			? Math.max(0.2, 0.04 + this.informationLineCount * 0.08)
-			: 0.055;
-		const graphRatio = hasAltitudeGraph ? 0.28 : 0;
-		const heightRatio = 0.6 + footerRatio + graphRatio;
+		const activeInformation = input.informationOrder.filter((item) => {
+			if (item === 'altitude') return hasAltitudeGraph;
+			if (item === 'date-time') return input.showDateTime && input.clipCreatedAt !== null;
+			if (item === 'distance') return input.showDistance;
+			if (item === 'speed') return input.showSpeed;
+			return input.showCoordinates;
+		});
+		const informationRatio = activeInformation.reduce(
+			(total, item) => total + (item === 'altitude' ? 0.28 : 0.08),
+			0.055,
+		);
+		const heightRatio = 0.6 + informationRatio;
 		const margin = Math.round(Math.min(frameWidth, frameHeight) * 0.035);
 		const desiredWidth = frameWidth * input.size / 100;
 		this.width = Math.round(Math.min(desiredWidth, (frameHeight - margin * 2) / heightRatio));
@@ -114,9 +116,7 @@ export class GpsMiniMap {
 		const minY = Math.min(...projected.map((point) => point.y));
 		const maxY = Math.max(...projected.map((point) => point.y));
 		const mapTop = this.padding;
-		const footerHeight = this.hasTextInformation ? Math.round(this.width * footerRatio) : this.padding;
-		const graphHeight = hasAltitudeGraph ? Math.round(this.width * 0.28) : 0;
-		const mapBottom = this.height - footerHeight - graphHeight;
+		const mapBottom = Math.round(this.width * 0.6);
 		const mapWidth = this.width - this.padding * 2;
 		const mapHeight = Math.max(1, mapBottom - mapTop);
 		const scale = Math.min(mapWidth / Math.max(maxX - minX, 1e-8), mapHeight / Math.max(maxY - minY, 1e-8));
@@ -135,17 +135,28 @@ export class GpsMiniMap {
 		const elevations = this.points
 			.map((point) => point.elevation)
 			.filter((elevation): elevation is number => elevation !== null);
-		this.altitudeGraph = hasAltitudeGraph && elevations.length > 0
-			? {
+		let informationTop = mapBottom;
+		let altitudeGraph: AltitudeGraph | null = null;
+		for (const item of activeInformation) {
+			if (item === 'altitude') {
+				const graphHeight = Math.round(this.width * 0.28);
+				altitudeGraph = {
 					left: this.padding,
 					right: this.width - this.padding,
-					top: mapBottom + this.padding * 0.55,
-					bottom: mapBottom + graphHeight - this.padding * 0.45,
+					top: informationTop + this.padding * 0.55,
+					bottom: informationTop + graphHeight - this.padding * 0.45,
 					min: Math.min(...elevations),
 					max: Math.max(...elevations),
 					totalDistance: cumulativeDistance,
-				}
-			: null;
+				};
+				informationTop += graphHeight;
+			} else {
+				const rowHeight = Math.round(this.width * 0.08);
+				this.informationRows.set(item, informationTop + rowHeight - this.padding * 0.16);
+				informationTop += rowHeight;
+			}
+		}
+		this.altitudeGraph = altitudeGraph;
 		this.base = new OffscreenCanvas(this.width, this.height);
 		const baseContext = this.base.getContext('2d');
 		if (!baseContext) throw new Error('Could not create the GPS mini map.');
@@ -388,6 +399,7 @@ export class GpsMiniMap {
 		const current = this.pointAt(seconds);
 		if (!current) return false;
 		context.save();
+		context.globalAlpha *= this.input.opacity / 100;
 		context.translate(this.x, this.y);
 		context.drawImage(this.base, 0, 0);
 		context.lineCap = 'round';
@@ -441,37 +453,33 @@ export class GpsMiniMap {
 			);
 		}
 
-		if (this.hasTextInformation) {
-			const metricLabels = [
-				this.input.showSpeed && current.speed !== null ? `${Math.round(current.speed * 3.6)} km/h` : null,
-			].filter((label): label is string => Boolean(label));
-			if (this.input.showDistance) {
-				metricLabels.push(current.point.distance < 1000
-					? `${Math.round(current.point.distance)} m`
-					: `${(current.point.distance / 1000).toFixed(2)} km`);
-			}
-			const lines: string[] = [];
-			if (this.input.showDateTime && this.input.clipCreatedAt !== null) {
-				const date = new Date(this.input.clipCreatedAt + seconds * 1000);
-				const pad = (value: number) => String(value).padStart(2, '0');
-				lines.push(
-					`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-					`${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`,
-				);
-			}
-			if (metricLabels.length > 0) lines.push(metricLabels.join('  '));
-			if (this.input.showCoordinates) {
-				lines.push(`${current.point.latitude.toFixed(5)}, ${current.point.longitude.toFixed(5)}`);
-			}
+		if (this.informationRows.size > 0) {
 			const fontSize = Math.max(10, Math.round(this.width * 0.052));
-			const lineHeight = Math.round(fontSize * 1.2);
 			context.font = `600 ${fontSize}px "Segoe UI", system-ui, sans-serif`;
 			context.textBaseline = 'bottom';
+			context.textAlign = 'left';
 			context.fillStyle = '#ffffff';
-			const bottom = this.height - this.padding;
-			for (const [index, line] of lines.entries()) {
-				const y = bottom - (lines.length - index - 1) * lineHeight;
-				context.fillText(line, this.padding, y, this.width - this.padding * 2);
+			for (const item of this.input.informationOrder) {
+				if (item === 'altitude') continue;
+				const y = this.informationRows.get(item);
+				if (y === undefined) continue;
+				let label: string | null = null;
+				if (item === 'distance') {
+					label = current.point.distance < 1000
+						? `${Math.round(current.point.distance)} m`
+						: `${(current.point.distance / 1000).toFixed(2)} km`;
+				} else if (item === 'speed' && current.speed !== null) {
+					label = `${Math.round(current.speed * 3.6)} km/h`;
+				} else if (item === 'coordinates') {
+					label = `${current.point.latitude.toFixed(5)}, ${current.point.longitude.toFixed(5)}`;
+				} else if (item === 'date-time' && this.input.clipCreatedAt !== null) {
+					const date = new Date(this.input.clipCreatedAt + seconds * 1000);
+					const pad = (value: number) => String(value).padStart(2, '0');
+					label =
+						`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+						`${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+				}
+				if (label) context.fillText(label, this.padding, y, this.width - this.padding * 2);
 			}
 		}
 		context.restore();

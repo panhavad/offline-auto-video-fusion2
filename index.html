@@ -126,14 +126,58 @@
 						</select>
 					</label>
 
+					<label class="field field-face-blur">
+						<span class="field-label"><span class="control-icon" aria-hidden="true">☻</span>Face privacy</span>
+						<select id="face-blur" title="Detects human faces on this device and hides them. Adds a detection pass to every frame.">
+							<option value="off">Off (fastest)</option>
+							<option value="blur">Blur faces</option>
+							<option value="strong">Blur faces (strong)</option>
+							<option value="pixelate">Pixelate faces</option>
+						</select>
+					</label>
+
 					</div>
 				</section>
 			</div>
 
-			<div class="overlay-panels">
-				<section class="panel" id="panel-gps">
-					<h2><span class="control-icon" aria-hidden="true">⌖</span>GPS mini map <span class="pill pill-muted">Optional</span></h2>
-					<div class="gps-section">
+			<section class="panel" id="panel-overlay">
+				<h2><span class="control-icon control-icon-text" aria-hidden="true">T</span>Text &amp; GPS overlays</h2>
+				<div class="overlay-layout">
+					<div class="overlay-controls">
+						<h3 class="overlay-group-title">Text overlay</h3>
+						<div class="text-controls">
+							<label class="field field-title">
+								<span class="field-label">Title text</span>
+								<input type="text" id="title-text" placeholder="Shown on every frame (leave empty for none)" />
+							</label>
+							<label class="field field-title-position">
+								<span class="field-label">Position</span>
+								<select id="title-position">
+									<option value="top-left">Top left</option>
+									<option value="top-center">Top center</option>
+									<option value="top-right">Top right</option>
+									<option value="middle-left">Middle left</option>
+									<option value="middle-center">Middle center</option>
+									<option value="middle-right">Middle right</option>
+									<option value="bottom-left">Bottom left</option>
+									<option value="bottom-center">Bottom center</option>
+									<option value="bottom-right">Bottom right</option>
+								</select>
+							</label>
+							<label class="field field-title-color">
+								<span class="field-label">Color</span>
+								<span class="color-row">
+									<input type="color" id="title-color" aria-label="Title color picker" />
+									<input type="text" id="title-color-hex" spellcheck="false" aria-label="Title color hex value" />
+								</span>
+							</label>
+							<label class="field field-title-size">
+								<span class="field-label">Size (%)</span>
+								<input type="number" id="title-scale" min="2" max="30" step="0.5" />
+							</label>
+						</div>
+						<hr class="overlay-separator" />
+						<h3 class="overlay-group-title"><span class="control-icon" aria-hidden="true">⌖</span>GPS mini map <span class="pill pill-muted">Optional</span></h3>
 						<div class="gps-controls">
 							<div class="field field-gps-file">
 								<span class="field-label">GPS data file</span>
@@ -174,65 +218,45 @@
 								<span class="rotation-marks" aria-hidden="true"><span>0°</span><span>90°</span><span>180°</span><span>270°</span><span>359°</span></span>
 								<span class="muted small">The offline map background is illustrative; no map tiles are downloaded.</span>
 							</label>
+							<label class="field field-gps-opacity">
+								<span class="field-label">Map opacity <output id="gps-opacity-value" for="gps-opacity">90%</output></span>
+								<input type="range" id="gps-opacity" min="10" max="100" step="1" />
+								<span class="rotation-marks" aria-hidden="true"><span>10%</span><span>50%</span><span>100%</span></span>
+							</label>
 							<fieldset class="gps-info">
-								<legend>Information shown</legend>
-								<label class="check"><input type="checkbox" id="gps-show-speed" /><span>Speed</span></label>
-								<label class="check"><input type="checkbox" id="gps-show-altitude" /><span>Altitude graph</span></label>
-								<label class="check"><input type="checkbox" id="gps-show-distance" /><span>Distance</span></label>
-								<label class="check"><input type="checkbox" id="gps-show-coordinates" /><span>Coordinates</span></label>
-								<label class="check" title="Shown when the video contains recording date metadata"><input type="checkbox" id="gps-show-date-time" /><span>Date &amp; time</span></label>
+								<legend>Information shown (top to bottom)</legend>
+								<div id="gps-info-list" class="gps-info-list">
+									<div class="gps-info-item" data-gps-info="altitude">
+										<label class="check"><input type="checkbox" id="gps-show-altitude" /><span>Altitude graph</span></label>
+										<span class="gps-order-actions"><button class="btn btn-white gps-order-button" type="button" data-direction="up" aria-label="Move altitude graph up">↑</button><button class="btn btn-white gps-order-button" type="button" data-direction="down" aria-label="Move altitude graph down">↓</button></span>
+									</div>
+									<div class="gps-info-item" data-gps-info="distance">
+										<label class="check"><input type="checkbox" id="gps-show-distance" /><span>Distance</span></label>
+										<span class="gps-order-actions"><button class="btn btn-white gps-order-button" type="button" data-direction="up" aria-label="Move distance up">↑</button><button class="btn btn-white gps-order-button" type="button" data-direction="down" aria-label="Move distance down">↓</button></span>
+									</div>
+									<div class="gps-info-item" data-gps-info="date-time" title="Shown when the video contains recording date metadata">
+										<label class="check"><input type="checkbox" id="gps-show-date-time" /><span>Date &amp; time</span></label>
+										<span class="gps-order-actions"><button class="btn btn-white gps-order-button" type="button" data-direction="up" aria-label="Move date and time up">↑</button><button class="btn btn-white gps-order-button" type="button" data-direction="down" aria-label="Move date and time down">↓</button></span>
+									</div>
+									<div class="gps-info-item" data-gps-info="speed">
+										<label class="check"><input type="checkbox" id="gps-show-speed" /><span>Speed</span></label>
+										<span class="gps-order-actions"><button class="btn btn-white gps-order-button" type="button" data-direction="up" aria-label="Move speed up">↑</button><button class="btn btn-white gps-order-button" type="button" data-direction="down" aria-label="Move speed down">↓</button></span>
+									</div>
+									<div class="gps-info-item" data-gps-info="coordinates">
+										<label class="check"><input type="checkbox" id="gps-show-coordinates" /><span>Coordinates</span></label>
+										<span class="gps-order-actions"><button class="btn btn-white gps-order-button" type="button" data-direction="up" aria-label="Move coordinates up">↑</button><button class="btn btn-white gps-order-button" type="button" data-direction="down" aria-label="Move coordinates down">↓</button></span>
+									</div>
+								</div>
 							</fieldset>
 						</div>
-						<div class="preview-block">
-							<span class="field-label">Imported route preview</span>
-							<canvas id="gps-preview" class="preview-canvas" width="640" height="360" aria-label="GPS mini map preview"></canvas>
-							<span id="gps-preview-empty" class="preview-empty">Choose a GPS file to preview its route.</span>
-						</div>
 					</div>
-				</section>
-
-				<section class="panel" id="panel-overlay-preview">
-					<h2><span class="control-icon control-icon-text" aria-hidden="true">T</span>Text overlay &amp; preview</h2>
-					<div class="text-section">
-						<div class="text-controls">
-							<label class="field field-title">
-								<span class="field-label">Title text</span>
-								<input type="text" id="title-text" placeholder="Shown on every frame (leave empty for none)" />
-							</label>
-							<label class="field field-title-position">
-								<span class="field-label">Position</span>
-								<select id="title-position">
-									<option value="top-left">Top left</option>
-									<option value="top-center">Top center</option>
-									<option value="top-right">Top right</option>
-									<option value="middle-left">Middle left</option>
-									<option value="middle-center">Middle center</option>
-									<option value="middle-right">Middle right</option>
-									<option value="bottom-left">Bottom left</option>
-									<option value="bottom-center">Bottom center</option>
-									<option value="bottom-right">Bottom right</option>
-								</select>
-							</label>
-							<label class="field field-title-color">
-								<span class="field-label">Color</span>
-								<span class="color-row">
-									<input type="color" id="title-color" aria-label="Title color picker" />
-									<input type="text" id="title-color-hex" spellcheck="false" aria-label="Title color hex value" />
-								</span>
-							</label>
-							<label class="field field-title-size">
-								<span class="field-label">Size (%)</span>
-								<input type="number" id="title-scale" min="2" max="30" step="0.5" />
-							</label>
-						</div>
-						<div class="preview-block">
-							<span id="overlay-preview-label" class="muted small">16:9 preview</span>
-							<canvas id="overlay-preview" class="preview-canvas output-preview" width="640" height="360" aria-label="Title and GPS overlay preview"></canvas>
-							<span class="muted small">Follows the selected aspect ratio, title style, and GPS placement.</span>
-						</div>
+					<div id="overlay-preview-block" class="preview-block">
+						<div class="preview-heading"><span id="overlay-preview-label" class="muted small">16:9 preview</span><button id="overlay-preview-fullscreen" class="btn btn-white preview-fullscreen" type="button">Full screen</button></div>
+						<canvas id="overlay-preview" class="preview-canvas output-preview" width="640" height="360" aria-label="Title and GPS overlay preview"></canvas>
+						<span id="overlay-preview-note" class="muted small">Follows the selected aspect ratio, title style, and GPS placement.</span>
 					</div>
-				</section>
-			</div>
+				</div>
+			</section>
 
 			<section class="panel" id="panel-clips">
 				<h2><span class="step">3</span> Clips <span id="clip-count" class="pill pill-muted">0</span></h2>

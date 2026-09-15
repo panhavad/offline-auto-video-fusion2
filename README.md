@@ -15,6 +15,7 @@ even when the server is gone.
 - [What it does](#what-it-does)
 - [How it stays fast and light on memory](#how-it-stays-fast-and-light-on-memory)
 - [Stabilization](#stabilization)
+- [Face privacy](#face-privacy)
 - [Offline](#offline)
 - [Browser support](#browser-support)
 - [Project layout](#project-layout)
@@ -120,8 +121,9 @@ instead.
 | Title text / position / color / size | Text burned into every frame, at one of 9 positions. `\n` starts a second line. |
 | Frame rate | Upper limit — source frames are never duplicated to reach it. *Auto* (default) matches the fastest selected clip, or falls back to a 120 fps limit when no source rate can be detected. |
 | Stabilizer | Software stabilization applied automatically to **every** clip. *Off* (default) skips it entirely; *Light* / *Standard* / *Strong* trade an increasing crop for an increasingly steady picture. See [Stabilization](#stabilization). |
-| GPS mini map | A separate optional GPS section accepts GPX, KML, GeoJSON or CSV and previews the imported route before merging. Timestamped tracks align to each video's creation metadata; embedded video coordinates are used as a fallback anchor. |
-| Mini map display | Places the overlay in any corner, sizes it from 15–50% of the video width, rotates it through 0–359°, chooses a plain or illustrative offline-map background, and independently shows or hides speed, altitude profile, traveled distance, coordinates, and the video's date and time. |
+| Face privacy | Automatically finds human faces and hides them. *Off* (default) skips detection entirely; *Blur faces* / *Blur faces (strong)* soften them, *Pixelate faces* replaces them with blocks. See [Face privacy](#face-privacy). |
+| GPS mini map | An optional GPS group accepts GPX, KML, GeoJSON or CSV and previews the route in the shared output preview before merging. Timestamped tracks align to each video's creation metadata; embedded video coordinates are used as a fallback anchor. |
+| Mini map display | Places the overlay in any corner, defaults to 25% of the video width, sizes it from 15–50%, adjusts its opacity, rotates it through 0–359°, chooses a plain or illustrative offline-map background, and independently shows, hides, or reorders speed, altitude profile, traveled distance, coordinates, and the video's date and time. |
 | Acceleration | How much of the machine the merge may use. *Auto* (default) sizes the pipeline from the detected GPU, core count and memory; *Maximum* pushes further on a workstation; *Balanced* leaves headroom for other work; *Compatibility* falls back to the strictly sequential pipeline. The detected GPU is written to the log when the app starts. |
 
 With both frame controls on *auto* the output is exactly the first clip's frame, and clips of a
@@ -142,11 +144,13 @@ illustrative streets, blocks, water and a rotating north indicator for visual ro
 not live road data. Enabling *Altitude graph* adds the complete elevation profile under the route,
 with a moving progress marker and the current interpolated altitude. Enabling *Date & time* shows
 the video's recording time and advances it with each frame when creation metadata is available.
+Altitude, distance, and date/time are enabled by default. Use the arrow controls to set their
+top-to-bottom order. Click the preview, or its *Full screen* button, to inspect it full screen.
 
-The **Text overlay & preview** section keeps title text, position, color and size beside the live
-preview. The preview follows the selected aspect ratio (or the first eligible clip in *Auto*).
-When GPS data is loaded it also shows the selected mini map size, corner and information fields in
-the same output frame.
+The **Text & GPS overlays** section keeps the title controls and the GPS controls in one panel,
+split by a separator, and both share a single live preview to save space. The preview follows the
+selected aspect ratio (or the first eligible clip in *Auto*) and shows the title style together
+with the selected mini map size, corner, opacity and information fields in the same output frame.
 
 **3 · Review the clips.** Each clip is probed in a worker: resolution, orientation, duration, dates
 and a decoded thumbnail. Sort by name, modified or created date (ascending/descending) — **the list
@@ -226,6 +230,8 @@ Other notes:
 - **Per-clip length limit** (default *20 s*): longer clips are trimmed, `0` keeps the full length.
 - **Automatic software stabilization** (default *off*): once switched on, every clip is stabilized
   with optical-flow motion tracking — no per-clip setup. See [Stabilization](#stabilization).
+- **Automatic face blurring** (default *off*): faces are detected on your own machine and blurred
+  or pixelated in the merged video, with no per-clip setup. See [Face privacy](#face-privacy).
 - **Title text burned into every frame**, with 9 positions (default *bottom right*) and a free
   colour (default *white*), an adjustable size and an optional shadow for legibility.
 - **Sorting by name, modified date or created date**, ascending or descending. The list order is
@@ -305,6 +311,48 @@ merged unstabilized and a warning is logged; the same happens if OpenCV fails to
 is never allowed to cost you a clip.
 
 
+## Face privacy
+
+*Face privacy* finds human faces in every clip and hides them in the merged video, so footage can
+be shared without exposing bystanders. It is **off by default** and costs a detection pass per
+frame when enabled.
+
+Detection uses the Haar cascade classifier from OpenCV's `objdetect` module. The model is bundled
+with the app and precached by the service worker, so — like everything else here — enabling this
+sends nothing anywhere and works with the network off. Frames are never uploaded.
+
+**How a frame is processed** ([`src/lib/face-blur.ts`](src/lib/face-blur.ts)):
+
+1. **Detect** on a copy of the frame scaled to a 360 px long edge. Faces are coarse features, so
+   the small copy finds them as reliably as the full frame at a fraction of the cost. Scaling by the
+   long edge keeps landscape and portrait clips equally expensive. The copy is contrast-equalized
+   first, which is what finds faces that are back-lit or in shadow.
+2. **Track** the boxes across frames. Haar detection flickers — a face that turns slightly drops out
+   for a few frames — so a box keeps being covered for about a third of a second after the detector
+   last saw it, and is then dropped. This stops a face from flashing into view mid-clip.
+3. **Obscure** each box on the full-resolution frame by resampling it through a tiny buffer, which
+   destroys the detail irreversibly. Smooth upscaling reads as a blur; unsmoothed upscaling reads as
+   pixelation. Blurred regions are clipped to an ellipse so they follow a head instead of looking
+   like a pasted-on rectangle.
+
+Detection runs every other frame and the tracked boxes cover the frames in between, which keeps the
+added cost near 10 ms per frame rather than 30.
+
+Faces are hidden **before** the title and the GPS mini map are drawn, so overlays always stay sharp.
+
+**Limits worth knowing.** The cascade detects *front-facing* faces; a full profile, a face turned
+far from the camera, or one that is heavily occluded may be missed, and the occasional false
+positive may blur a face-like patch of background. It is a strong privacy aid, not a guarantee —
+**check the output before publishing**. If the model or OpenCV fails to load, the clip is still
+merged, but an **error** is logged saying faces are not obscured, because silently publishing
+unblurred faces would be far worse than a noisy failure.
+
+The bundled model is
+[`haarcascade_frontalface_default.xml`](src/assets/haarcascade_frontalface_default.xml) from the
+[OpenCV](https://github.com/opencv/opencv) project, redistributed under the BSD-style license
+reproduced in the file's own header.
+
+
 ### Mixed audio formats
 
 You do not have to care about the channel layout or sample rate of the source clips. An encoder is
@@ -370,6 +418,8 @@ src/worker/pipeline.worker.ts  probing, the render lanes, and the encode → mux
 src/worker/clip-renderer.ts    per-clip demux → decode → composite work run by each lane
 src/lib/hardware.ts            GPU/CPU detection and the lane + look-ahead budget it derives
 src/lib/stabilizer.ts          optical-flow motion analysis, trajectory smoothing, frame correction
+src/lib/face-blur.ts           Haar face detection, box tracking, and the blur/pixelate pass
+src/assets/                    the bundled face detection model (OpenCV Haar cascade)
 src/lib/opencv.ts              lazy OpenCV.js loader (isolates its thenable module object)
 src/lib/audio.ts               normalizes any channel layout / sample rate to 48 kHz stereo
 src/lib/                       formatting helpers and persisted settings
