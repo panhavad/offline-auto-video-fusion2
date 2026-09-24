@@ -1,4 +1,4 @@
-import type { GeoPoint, GpsPoint, GpsTrack } from '../types';
+import type { GpsPoint, GpsTrack } from '../types';
 
 const LATITUDE_KEYS = ['latitude', 'lat'];
 const LONGITUDE_KEYS = ['longitude', 'lon', 'lng', 'long'];
@@ -200,25 +200,4 @@ export const parseGpsFile = async (file: File): Promise<GpsTrack> => {
 		return parseGeoJson(file.name, JSON.parse(text));
 	}
 	return parseCsv(file.name, text);
-};
-
-/** Parses ISO 6709 values commonly stored in QuickTime location metadata. */
-export const parseIso6709 = (value: string): GeoPoint | null => {
-	const match = value.trim().match(/^([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)/);
-	if (!match) return null;
-	const latitude = Number(match[1]);
-	const longitude = Number(match[2]);
-	return validPoint({ latitude, longitude, timestamp: null, elevation: null, speed: null })
-		? { latitude, longitude }
-		: null;
-};
-
-export const locationFromMetadata = (raw: Record<string, unknown> | undefined): GeoPoint | null => {
-	if (!raw) return null;
-	for (const [key, value] of Object.entries(raw)) {
-		if (typeof value !== 'string' || !/(location|iso6709|gps)/i.test(key)) continue;
-		const parsed = parseIso6709(value);
-		if (parsed) return parsed;
-	}
-	return null;
 };

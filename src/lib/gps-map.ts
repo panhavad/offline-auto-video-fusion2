@@ -2,8 +2,11 @@ import type { GeoPoint, GpsInfoItem, GpsMapBackground, GpsMapPosition, GpsPoint 
 
 export interface GpsOverlayInput {
 	points: GpsPoint[];
-	clipCreatedAt: number | null;
-	clipLocation: GeoPoint | null;
+	/**
+	 * Wall-clock time the clip starts at, in milliseconds since the epoch. A timestamped track is
+	 * matched against this value, so the mini map always shows where the camera was at that moment.
+	 */
+	clipStartTime: number | null;
 	clipDuration: number;
 	position: GpsMapPosition;
 	size: number;
@@ -19,13 +22,6 @@ export interface GpsOverlayInput {
 }
 
 type DrawingContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-
-const distanceSquared = (a: GeoPoint, b: GeoPoint): number => {
-	const latitudeScale = Math.cos(((a.latitude + b.latitude) * Math.PI) / 360);
-	const x = (a.longitude - b.longitude) * latitudeScale;
-	const y = a.latitude - b.latitude;
-	return x * x + y * y;
-};
 
 const distanceMetres = (a: GeoPoint, b: GeoPoint): number => {
 	const latitudeScale = Math.cos(((a.latitude + b.latitude) * Math.PI) / 360);
@@ -67,10 +63,16 @@ export class GpsMiniMap {
 		frameWidth: number,
 		frameHeight: number,
 	) {
+		// A timestamped track is driven by the clip's own wall clock: the route position for any
+		// frame is looked up by (clip start time + elapsed seconds). Tracks without timestamps fall
+		// back to following the clip's progress from end to end.
+		const trackIsTimed = input.points[0].timestamp !== null;
+		this.startTime = trackIsTimed ? input.clipStartTime ?? input.points[0].timestamp : null;
+		const hasClock = this.startTime !== null || input.clipStartTime !== null;
 		const hasAltitudeGraph = input.showAltitude && input.points.some((point) => point.elevation !== null);
 		const activeInformation = input.informationOrder.filter((item) => {
 			if (item === 'altitude') return hasAltitudeGraph;
-			if (item === 'date-time') return input.showDateTime && input.clipCreatedAt !== null;
+			if (item === 'date-time') return input.showDateTime && hasClock;
 			if (item === 'distance') return input.showDistance;
 			if (item === 'speed') return input.showSpeed;
 			return input.showCoordinates;
@@ -311,26 +313,6 @@ export class GpsMiniMap {
 		baseContext.textAlign = 'center';
 		baseContext.textBaseline = 'bottom';
 		baseContext.fillText('N', compassX, compassY - compassRadius * 0.72);
-
-		const firstTimestamp = input.points[0].timestamp;
-		if (firstTimestamp === null) {
-			this.startTime = null;
-		} else if (input.clipCreatedAt !== null) {
-			this.startTime = input.clipCreatedAt;
-		} else if (input.clipLocation) {
-			let nearest = input.points[0];
-			let nearestDistance = distanceSquared(input.clipLocation, nearest);
-			for (const point of input.points.slice(1)) {
-				const distance = distanceSquared(input.clipLocation, point);
-				if (distance < nearestDistance) {
-					nearest = point;
-					nearestDistance = distance;
-				}
-			}
-			this.startTime = nearest.timestamp;
-		} else {
-			this.startTime = firstTimestamp;
-		}
 	}
 
 	private altitudeX(distance: number, pointIndex: number): number {
@@ -472,12 +454,18 @@ export class GpsMiniMap {
 					label = `${Math.round(current.speed * 3.6)} km/h`;
 				} else if (item === 'coordinates') {
 					label = `${current.point.latitude.toFixed(5)}, ${current.point.longitude.toFixed(5)}`;
-				} else if (item === 'date-time' && this.input.clipCreatedAt !== null) {
-					const date = new Date(this.input.clipCreatedAt + seconds * 1000);
-					const pad = (value: number) => String(value).padStart(2, '0');
-					label =
-						`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-						`${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+				} else if (item === 'date-time') {
+					// Prefer the GPS clock the frame was matched to; untimed tracks fall back to the
+					// clip's own wall clock.
+					const clock = current.point.timestamp ??
+						(this.input.clipStartTime === null ? null : this.input.clipStartTime + seconds * 1000);
+					if (clock !== null) {
+						const date = new Date(clock);
+						const pad = (value: number) => String(value).padStart(2, '0');
+						label =
+							`${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+							`${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+					}
 				}
 				if (label) context.fillText(label, this.padding, y, this.width - this.padding * 2);
 			}

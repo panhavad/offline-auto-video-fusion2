@@ -67,8 +67,6 @@ export interface ProbeResult {
 	hasAudio: boolean;
 	codec: string | null;
 	createdAt: number | null;
-	/** Recording location parsed from the video's metadata when available. */
-	location: GeoPoint | null;
 	/** Small JPEG preview of an early frame, or null when no frame could be decoded. */
 	thumbnail: Blob | null;
 }
@@ -115,10 +113,11 @@ export interface MergeItem {
 	plannedSeconds: number;
 	/** Frame rate measured while probing, or null when it could not be determined. */
 	sourceFrameRate: number | null;
-	/** Creation time used to align a timestamped GPS track with this clip. */
-	createdAt: number | null;
-	/** Embedded video coordinate used as a synchronization fallback. */
-	location: GeoPoint | null;
+	/**
+	 * Wall-clock time the clip was recorded at, taken from the video metadata and falling back to
+	 * the file's modified time. A timestamped GPS track is matched against this value.
+	 */
+	recordedAt: number | null;
 }
 
 export type MergeTarget =

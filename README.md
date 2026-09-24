@@ -9,6 +9,7 @@ even when the server is gone.
 ## Contents
 
 - [Quick start with Docker](#quick-start-with-docker)
+  - [Automatic updates from git](#automatic-updates-from-git)
 - [Quick start without Docker](#quick-start-without-docker)
 - [Using the app](#using-the-app)
 - [Deployment](#deployment)
@@ -46,6 +47,7 @@ both git and Docker.
 | `APP_PORT` | `8080` | host port of the nginx container (`docker compose up app`) |
 | `DEV_PORT` | `5173` | Vite dev server — the `dev` compose service *and* `npm run dev` |
 | `PREVIEW_PORT` | `4173` | `npm run preview` |
+| `UPDATE_*`, `TZ` | see below | the optional [auto-update service](#automatic-updates-from-git) |
 
 Every variable has a fallback baked into [`docker-compose.yml`](docker-compose.yml) and
 [`vite.config.ts`](vite.config.ts), so the project still runs when `.env` is missing — a fresh
@@ -68,6 +70,69 @@ so a Windows/macOS host never leaks incompatible native binaries into the Linux 
 passed into the container and used on both sides of the mapping, so the URL Vite prints is the one
 that works from the host.
 
+### Automatic updates from git
+
+The `updater` service watches the git remote and redeploys the app on its own: when `main` gets a
+new commit it pulls it, rebuilds the image and restarts the container. Deploy from a **clone**
+(not from an unpacked archive) and start it with its profile:
+
+```bash
+git clone https://github.com/panhavad/offline-auto-video-fusion2.git
+cd offline-auto-video-fusion2
+cp .env.example .env
+docker compose up -d --build app                     # the app itself
+docker compose --profile autoupdate up -d updater    # keep it up to date
+docker compose logs -f updater                       # watch what it does
+```
+
+Nothing happens without that profile, so a plain `docker compose up -d` never changes the host
+behind your back. One update cycle does exactly this:
+
+1. `git fetch` the tracked branch (`UPDATE_REMOTE`/`UPDATE_BRANCH`, default `origin`/`main`).
+2. Stop here when the remote has not moved and the current commit is already deployed.
+3. Fast-forward the checkout to the remote commit and log the commits that arrived.
+4. `docker compose build app`, then `docker compose up -d app`.
+5. Record the deployed commit and delete the images the rebuild left dangling.
+
+Because the container is only replaced *after* the image builds, a broken commit never takes the
+running app down: the failure is logged, the old container keeps serving, and the deployment is
+retried on the next cycle until it succeeds. The browser picks the new version up on the next
+reload — `index.html` and `sw.js` are served with `no-cache`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `UPDATE_REMOTE` | `origin` | remote to fetch from |
+| `UPDATE_BRANCH` | `main` | branch to follow |
+| `UPDATE_INTERVAL` | `300` | seconds between two checks |
+| `UPDATE_SERVICES` | `app` | compose services to rebuild and restart (space separated) |
+| `UPDATE_PRUNE` | `true` | remove the dangling images a rebuild replaces |
+| `UPDATE_FORCE_RESET` | `false` | discard local modifications instead of skipping the update |
+| `UPDATE_DEPLOY_ON_START` | `false` | rebuild once at startup even without a new commit |
+| `UPDATE_ONCE` | `false` | run a single cycle and exit — useful from cron |
+| `TZ` | `UTC` | time zone of the updater's log timestamps |
+
+Good to know:
+
+- **Your work is never overwritten.** Local commits (a diverged branch) or edited tracked files stop
+  the update with a warning that names the files; set `UPDATE_FORCE_RESET=true` on a deployment
+  clone that must always match the remote. Differences that are only line endings — what a checkout
+  made on Windows looks like to the Linux container — are not treated as local work.
+- **It needs the Docker socket.** `/var/run/docker.sock` is mounted so the updater can build and
+  restart containers, which is root-equivalent access to the host. Run it only on a machine where
+  you trust the repository it follows, and prefer a dedicated deployment clone.
+- **Private repositories** need credentials in the container: uncomment the `~/.ssh` mount in
+  [`docker-compose.yml`](docker-compose.yml) and use an SSH remote, or embed a token in the HTTPS
+  remote URL of the clone.
+- **It never updates itself.** Only `UPDATE_SERVICES` is rebuilt, so a commit that changes the
+  updater itself is applied the next time you run
+  `docker compose --profile autoupdate up -d --build updater`.
+- **Prefer cron?** `docker compose --profile autoupdate run --rm -e UPDATE_ONCE=true updater` runs
+  exactly one cycle and exits.
+- **Upgrading an older deployment.** The compose project name is now pinned to `auto-video-fusion`
+  so the host and the updater drive the same stack. If the app was started from an older checkout,
+  run `docker compose down` (or `docker rm -f auto-video-fusion`) once before the first
+  `docker compose up -d app`, otherwise Compose reports that the container name is already in use.
+
 ### What is in the image
 
 | Stage | Base | Purpose |
@@ -76,6 +141,7 @@ that works from the host.
 | `dev` | `node:22-alpine` | Vite dev server, port from `DEV_PORT` |
 | `build` | `node:22-alpine` | `npm run build` → `dist/` incl. the generated service worker |
 | `runtime` | `nginx:1.27-alpine` | serves `dist/` on port 80, has a `HEALTHCHECK` |
+| `updater` | `alpine:3.21` | git + docker CLIs for the optional [auto-update service](#automatic-updates-from-git) |
 
 The nginx config lives in [`docker/nginx.conf`](docker/nginx.conf). It caches `/assets/*` (content
 hashed by Vite) for a year, forbids caching of `sw.js` and `index.html` so a new deploy is picked up
@@ -122,7 +188,7 @@ instead.
 | Frame rate | Upper limit — source frames are never duplicated to reach it. *Auto* (default) matches the fastest selected clip, or falls back to a 120 fps limit when no source rate can be detected. |
 | Stabilizer | Software stabilization applied automatically to **every** clip. *Off* (default) skips it entirely; *Light* / *Standard* / *Strong* trade an increasing crop for an increasingly steady picture. See [Stabilization](#stabilization). |
 | Face privacy | Automatically finds human faces and hides them. *Off* (default) skips detection entirely; *Blur faces* / *Blur faces (strong)* soften them, *Pixelate faces* replaces them with blocks. See [Face privacy](#face-privacy). |
-| GPS mini map | An optional GPS group accepts GPX, KML, GeoJSON or CSV and previews the route in the shared output preview before merging. Timestamped tracks align to each video's creation metadata; embedded video coordinates are used as a fallback anchor. |
+| GPS mini map | An optional GPS group accepts GPX, KML, GeoJSON or CSV and previews the route in the shared output preview before merging. A timestamped track is matched purely by time: every frame looks up the track position for the clip's recording timestamp plus the elapsed time inside the clip. |
 | Mini map display | Places the overlay in any corner, defaults to 25% of the video width, sizes it from 15–50%, adjusts its opacity, rotates it through 0–359°, chooses a plain or illustrative offline-map background, and independently shows, hides, or reorders speed, altitude profile, traveled distance, coordinates, and the video's date and time. |
 | Acceleration | How much of the machine the merge may use. *Auto* (default) sizes the pipeline from the detected GPU, core count and memory; *Maximum* pushes further on a workstation; *Balanced* leaves headroom for other work; *Compatibility* falls back to the strictly sequential pipeline. The detected GPU is written to the log when the app starts. |
 
@@ -138,12 +204,14 @@ encoding and falls back to software automatically when hardware encoding is not 
 
 GPS CSV files need `latitude` and `longitude` columns and may also include `time`/`timestamp`,
 `elevation` and `speed` (metres per second). A timestamped point must have a timestamp on every row.
-Untimed routes are advanced across each clip by relative progress. The mini map uses no online map
-tiles, so GPS rendering remains private and works offline. Its built-in cartographic background adds
-illustrative streets, blocks, water and a rotating north indicator for visual route context; it is
-not live road data. Enabling *Altitude graph* adds the complete elevation profile under the route,
-with a moving progress marker and the current interpolated altitude. Enabling *Date & time* shows
-the video's recording time and advances it with each frame when creation metadata is available.
+Each clip's recording time comes from the video's creation metadata and falls back to the file's
+modified time, and a clip whose time range falls outside the track shows no mini map (the merge log
+names it). Untimed routes are advanced across each clip by relative progress. The mini map uses no
+online map tiles, so GPS rendering remains private and works offline. Its built-in cartographic
+background adds illustrative streets, blocks, water and a rotating north indicator for visual route
+context; it is not live road data. Enabling *Altitude graph* adds the complete elevation profile
+under the route, with a moving progress marker and the current interpolated altitude. Enabling
+*Date & time* shows the GPS clock the frame was matched to and advances it with each frame.
 Altitude, distance, and date/time are enabled by default. Use the arrow controls to set their
 top-to-bottom order. Click the preview, or its *Full screen* button, to inspect it full screen.
 
@@ -208,7 +276,8 @@ Other notes:
   nothing about the host is baked into a tracked file.
 - **Deploying a new version** only requires replacing the container or the files. `sw.js` and
   `index.html` are served with `no-cache`, so the next reload installs the new precache and drops
-  the old one.
+  the old one. The [`updater` service](#automatic-updates-from-git) does this automatically on every
+  commit pushed to `main`.
 - **The container is stateless.** No volumes, no user data, nothing to back up — videos never leave
   the machine that runs the browser. It also runs read-only if you want:
   `docker run --read-only --tmpfs /var/cache/nginx --tmpfs /var/run -p 8080:80 auto-video-fusion`.
@@ -426,10 +495,11 @@ src/lib/                       formatting helpers and persisted settings
 src/dev/test-media.ts          dev-only fixture generator (not part of the bundle)
 scripts/build-sw.mjs           generates dist/sw.js with the precache manifest
 scripts/build-icons.mjs        regenerates public/favicon.ico and the PNG icons from icon.svg (`npm run icons`)
-Dockerfile                     deps → dev / build → nginx runtime
-docker-compose.yml             `app` (nginx) and `dev` (Vite) services, ports from .env
-.env.example                   port template — copy to .env (git-ignored)
+Dockerfile                     deps → dev / build → nginx runtime, plus the updater image
+docker-compose.yml             `app` (nginx), `dev` (Vite) and `updater` services, ports from .env
+.env.example                   port and auto-update template — copy to .env (git-ignored)
 docker/nginx.conf              static serving, caching and gzip rules
+docker/auto-update.sh          the update loop: fetch → fast-forward → rebuild → restart
 docs/screenshots/              images used by this README
 ```
 

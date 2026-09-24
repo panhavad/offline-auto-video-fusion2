@@ -1,5 +1,10 @@
 # Ports come from .env (copy .env.example to .env). The defaults below only
 # apply when a variable is missing, so the file stays usable without one.
+#
+# The project name is pinned so the updater container - which sees the checkout
+# under a different path - drives exactly the same stack as the host does.
+name: auto-video-fusion
+
 services:
   # Production-like static build served by nginx: http://localhost:${APP_PORT}
   app:
@@ -32,3 +37,40 @@ services:
       - CHOKIDAR_USEPOLLING=true
       - DEV_PORT=${DEV_PORT:-5173}
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+
+  # Continuous deployment: watches the git remote and rebuilds + restarts `app`
+  # whenever the tracked branch gets a new commit.
+  #   docker compose --profile autoupdate up -d updater
+  # Opt-in on purpose - without the profile nothing on the host is ever changed
+  # behind your back.
+  updater:
+    build:
+      context: .
+      target: updater
+    image: auto-video-fusion-updater:latest
+    container_name: auto-video-fusion-updater
+    profiles: ["autoupdate"]
+    restart: unless-stopped
+    environment:
+      # Which ref to follow and how often to look for new commits (seconds).
+      UPDATE_REMOTE: ${UPDATE_REMOTE:-origin}
+      UPDATE_BRANCH: ${UPDATE_BRANCH:-main}
+      UPDATE_INTERVAL: ${UPDATE_INTERVAL:-300}
+      # Services rebuilt and restarted after a successful pull.
+      UPDATE_SERVICES: ${UPDATE_SERVICES:-app}
+      # Remove the images a rebuild leaves dangling.
+      UPDATE_PRUNE: ${UPDATE_PRUNE:-true}
+      # Discard local modifications instead of skipping the update.
+      UPDATE_FORCE_RESET: ${UPDATE_FORCE_RESET:-false}
+      # Rebuild once at startup even when the checkout is already current.
+      UPDATE_DEPLOY_ON_START: ${UPDATE_DEPLOY_ON_START:-false}
+      # true runs a single cycle and exits, for `docker compose run` from cron.
+      UPDATE_ONCE: ${UPDATE_ONCE:-false}
+      TZ: ${TZ:-UTC}
+    volumes:
+      # The checkout it pulls into and builds from.
+      - .:/repo
+      # The host daemon it builds and restarts containers with.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # For a private repo over SSH, mount a deploy key read-only:
+      # - ${HOME}/.ssh:/root/.ssh:ro

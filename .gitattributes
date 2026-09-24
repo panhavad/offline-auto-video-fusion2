@@ -1,0 +1,6 @@
+# Shell scripts are executed inside Linux containers, so they must keep LF
+# endings even when the repository is checked out on Windows with autocrlf.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.conf text eol=lf

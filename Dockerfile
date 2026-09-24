@@ -46,3 +46,23 @@ EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 	CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
 CMD ["nginx", "-g", "daemon off;"]
+
+# ---------------------------------------------------------------------------
+# updater - polls the git remote and redeploys this stack when main moves.
+# It talks to the host Docker daemon through the mounted socket, so it needs
+# the git and docker CLIs but nothing of the app itself.
+# ---------------------------------------------------------------------------
+FROM alpine:3.21 AS updater
+RUN apk add --no-cache \
+	ca-certificates \
+	docker-cli \
+	docker-cli-buildx \
+	docker-cli-compose \
+	git \
+	openssh-client \
+	tzdata
+COPY docker/auto-update.sh /usr/local/bin/auto-update
+RUN chmod 755 /usr/local/bin/auto-update
+ENV REPO_DIR=/repo
+WORKDIR /repo
+ENTRYPOINT ["/usr/local/bin/auto-update"]

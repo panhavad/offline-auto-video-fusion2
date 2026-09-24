@@ -362,8 +362,7 @@ const previewGpsInput = (position = settings.gpsMapPosition, size = settings.gps
 		: 10;
 	return {
 		points: gpsTrack.points,
-		clipCreatedAt: firstTime,
-		clipLocation: null,
+		clipStartTime: firstTime,
 		clipDuration: duration,
 		position,
 		size,
@@ -529,7 +528,9 @@ const render = () => {
 
 		const createdCell = document.createElement('td');
 		createdCell.textContent = formatDate(entry.probe?.createdAt ?? null);
-		if (!entry.probe?.createdAt) createdCell.title = 'No creation date in the file metadata; modified date is used for sorting.';
+		if (!entry.probe?.createdAt) {
+			createdCell.title = 'No creation date in the file metadata; the modified date is used for sorting and GPS matching.';
+		}
 
 		const modifiedCell = document.createElement('td');
 		modifiedCell.textContent = formatDate(entry.lastModified);
@@ -994,8 +995,7 @@ const startMerge = async () => {
 				file: entry.file,
 				plannedSeconds: plannedSeconds(entry),
 				sourceFrameRate: entry.probe?.frameRate ?? null,
-				createdAt: entry.probe?.createdAt ?? null,
-				location: entry.probe?.location ?? null,
+				recordedAt: createdAtOf(entry),
 			};
 		});
 
@@ -1123,7 +1123,6 @@ function handleWorkerError(event: ErrorEvent) {
 			hasAudio: false,
 			codec: null,
 			createdAt: null,
-			location: null,
 			thumbnail: null,
 		});
 		pendingProbes.delete(id);

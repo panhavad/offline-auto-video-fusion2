@@ -48,7 +48,6 @@ import type {
 } from '../types';
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, AudioNormalizer } from '../lib/audio';
 import { formatFrameRate, resolveFrameRate } from '../lib/framerate';
-import { locationFromMetadata } from '../lib/gps';
 import { describeHardware, describePlan, detectHardware, planPipeline, type PipelinePlan } from '../lib/hardware';
 import { renderTitleOverlay } from '../lib/title-overlay';
 import { renderClip, type ClipRenderJob, type ClipRenderResult, type ClipRenderSink } from './clip-renderer';
@@ -156,7 +155,6 @@ async function probeFile(id: string, file: File): Promise<void> {
 		hasAudio: false,
 		codec: null,
 		createdAt: null,
-		location: null,
 		thumbnail: null,
 	};
 
@@ -198,13 +196,11 @@ async function probeFile(id: string, file: File): Promise<void> {
 		}
 
 		let createdAt: number | null = null;
-		let location = null;
 		try {
 			const tags = await input.getMetadataTags();
 			if (tags.date instanceof Date && !Number.isNaN(tags.date.getTime())) {
 				createdAt = tags.date.getTime();
 			}
-			location = locationFromMetadata(tags.raw);
 		} catch {
 			createdAt = null;
 		}
@@ -226,7 +222,6 @@ async function probeFile(id: string, file: File): Promise<void> {
 				hasAudio: Boolean(audioTrack),
 				codec,
 				createdAt,
-				location,
 				thumbnail,
 			},
 		});
@@ -583,17 +578,20 @@ async function runMerge(request: MergeRequest): Promise<void> {
 			if (firstGpsTime === null) {
 				log(`GPS mini map: "${gpsTrack.name}" has no timestamps, so its route follows each clip's progress.`, 'warn');
 			} else {
-				log(`GPS mini map: "${gpsTrack.name}" is synchronized from its timestamps.`);
+				const trackRange = `${new Date(firstGpsTime).toLocaleString()} → ${new Date(lastGpsTime!).toLocaleString()}`;
+				log(`GPS mini map: "${gpsTrack.name}" is matched by timestamp (${trackRange}).`);
 				for (const item of items) {
-					if (item.createdAt !== null) {
-						const clipEnd = item.createdAt + item.plannedSeconds * 1000;
-						if (clipEnd < firstGpsTime || item.createdAt > lastGpsTime!) {
-							log(`"${item.name}" is outside the GPS track's time range; its mini map will be hidden.`, 'warn');
-						}
-					} else if (item.location) {
-						log(`"${item.name}" has no creation time; its embedded GPS location anchors the mini map.`, 'warn');
-					} else {
-						log(`"${item.name}" has no usable time or GPS metadata; the mini map starts at the beginning of the track.`, 'warn');
+					if (item.recordedAt === null) {
+						log(`"${item.name}" has no timestamp, so its mini map starts at the beginning of the track.`, 'warn');
+						continue;
+					}
+					const clipEnd = item.recordedAt + item.plannedSeconds * 1000;
+					if (clipEnd < firstGpsTime || item.recordedAt > lastGpsTime!) {
+						log(
+							`"${item.name}" (${new Date(item.recordedAt).toLocaleString()}) falls outside the GPS track's ` +
+								'time range; its mini map will be hidden.',
+							'warn',
+						);
 					}
 				}
 			}
@@ -682,8 +680,7 @@ async function runMerge(request: MergeRequest): Promise<void> {
 			gps: gpsTrack
 				? {
 						points: gpsTrack.points,
-						clipCreatedAt: item.createdAt,
-						clipLocation: item.location,
+						clipStartTime: item.recordedAt,
 						clipDuration: item.plannedSeconds,
 						position: settings.gpsMapPosition,
 						size: settings.gpsMapSize,
