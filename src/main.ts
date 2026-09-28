@@ -8,6 +8,7 @@ import { formatSize, isCropped, parseAspectRatio, resolveFitMode, resolveOutputS
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type AppSettings } from './lib/settings';
 import { STABILIZER_LABELS } from './lib/stabilizer';
 import { renderTitleOverlay } from './lib/title-overlay';
+import { CREATION_DATE_SOURCE_LABELS, type CreationDateSource } from './lib/video-date';
 import type {
 	MergeItem,
 	MergeProgress,
@@ -322,6 +323,9 @@ const isVideoFile = (file: File): boolean => {
 
 const createdAtOf = (entry: ClipEntry): number => entry.probe?.createdAt ?? entry.lastModified;
 
+const createdAtSourceOf = (entry: ClipEntry): CreationDateSource =>
+	entry.probe?.createdAt ? entry.probe.createdAtSource ?? 'metadata' : 'modified';
+
 const plannedSeconds = (entry: ClipEntry): number => {
 	const duration = entry.probe?.duration ?? 0;
 	const limit = settings.maxClipSeconds > 0 ? settings.maxClipSeconds : Infinity;
@@ -528,8 +532,12 @@ const render = () => {
 
 		const createdCell = document.createElement('td');
 		createdCell.textContent = formatDate(entry.probe?.createdAt ?? null);
-		if (!entry.probe?.createdAt) {
-			createdCell.title = 'No creation date in the file metadata; the modified date is used for sorting and GPS matching.';
+		if (entry.probe?.createdAt && entry.probe.createdAtSource) {
+			createdCell.title = `Recording time read from the ${CREATION_DATE_SOURCE_LABELS[entry.probe.createdAtSource]}.`;
+		} else if (entry.probe) {
+			createdCell.title =
+				'No recording time in the metadata tags, the container header or the file name; ' +
+				'the modified date is used for sorting and GPS matching.';
 		}
 
 		const modifiedCell = document.createElement('td');
@@ -623,6 +631,32 @@ const probeEntry = (entry: ClipEntry): Promise<ProbeResult> =>
 		target.postMessage({ type: 'probe', id: entry.id, file: entry.file } satisfies WorkerInMessage);
 	});
 
+/**
+ * Summarises where the recording times came from, so a folder that falls back to modified dates is
+ * visible in the log instead of only in a per-row tooltip.
+ */
+const reportCreationDateSources = (probed: ClipEntry[]) => {
+	const readable = probed.filter((entry) => entry.probe?.ok);
+	if (readable.length === 0) return;
+
+	const counts = new Map<CreationDateSource, number>();
+	for (const entry of readable) {
+		const source = createdAtSourceOf(entry);
+		counts.set(source, (counts.get(source) ?? 0) + 1);
+	}
+
+	const order: CreationDateSource[] = ['metadata', 'container', 'filename', 'modified'];
+	const parts = order
+		.filter((source) => counts.has(source))
+		.map((source) => `${counts.get(source)} from the ${CREATION_DATE_SOURCE_LABELS[source]}`);
+	const missing = counts.get('modified') ?? 0;
+	addLog(
+		`Recording time: ${parts.join(', ')}.` +
+			(missing > 0 ? ` ${missing} clip${missing === 1 ? ' has no date of its own' : 's have no date of their own'}.` : ''),
+		missing === readable.length ? 'warn' : 'info',
+	);
+};
+
 const probeAll = async () => {
 	const queue = entries.filter((entry) => entry.status === 'pending');
 	if (queue.length === 0) return;
@@ -665,6 +699,7 @@ const probeAll = async () => {
 
 	await Promise.all(Array.from({ length: concurrency }, runNext));
 	ui.probeStatus.textContent = `${entries.filter((entry) => entry.probe?.ok).length} readable of ${entries.length}`;
+	reportCreationDateSources(queue);
 	render();
 };
 
@@ -996,6 +1031,7 @@ const startMerge = async () => {
 				plannedSeconds: plannedSeconds(entry),
 				sourceFrameRate: entry.probe?.frameRate ?? null,
 				recordedAt: createdAtOf(entry),
+				recordedAtSource: createdAtSourceOf(entry),
 			};
 		});
 
@@ -1123,6 +1159,7 @@ function handleWorkerError(event: ErrorEvent) {
 			hasAudio: false,
 			codec: null,
 			createdAt: null,
+			createdAtSource: null,
 			thumbnail: null,
 		});
 		pendingProbes.delete(id);

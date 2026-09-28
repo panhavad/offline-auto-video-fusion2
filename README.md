@@ -204,14 +204,18 @@ encoding and falls back to software automatically when hardware encoding is not 
 
 GPS CSV files need `latitude` and `longitude` columns and may also include `time`/`timestamp`,
 `elevation` and `speed` (metres per second). A timestamped point must have a timestamp on every row.
-Each clip's recording time comes from the video's creation metadata and falls back to the file's
-modified time, and a clip whose time range falls outside the track shows no mini map (the merge log
-names it). Untimed routes are advanced across each clip by relative progress. The mini map uses no
-online map tiles, so GPS rendering remains private and works offline. Its built-in cartographic
-background adds illustrative streets, blocks, water and a rotating north indicator for visual route
-context; it is not live road data. Enabling *Altitude graph* adds the complete elevation profile
-under the route, with a moving progress marker and the current interpolated altitude. Enabling
-*Date & time* shows the GPS clock the frame was matched to and advances it with each frame.
+Each clip's recording time is looked up in four steps: the video's creation metadata tag, then the
+container header creation time (what Windows Explorer shows as *Media created*, which is all most
+cameras write), then a timestamp in the file name (`VID_20240501_102233.mp4` and similar), and
+finally the file's modified time. The clip list shows where each date came from in the *Created*
+column tooltip, and the log summarises the mix after every scan. A clip whose time range falls
+outside the track shows no mini map (the merge log names it). Untimed routes are advanced across
+each clip by relative progress. The mini map uses no online map tiles, so GPS rendering remains
+private and works offline. Its built-in cartographic background adds illustrative streets, blocks,
+water and a rotating north indicator for visual route context; it is not live road data. Enabling
+*Altitude graph* adds the complete elevation profile under the route, with a moving progress marker
+and the current interpolated altitude. Enabling *Date & time* shows the GPS clock the frame was
+matched to and advances it with each frame.
 Altitude, distance, and date/time are enabled by default. Use the arrow controls to set their
 top-to-bottom order. Click the preview, or its *Full screen* button, to inspect it full screen.
 

@@ -50,6 +50,13 @@ import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, AudioNormalizer } from '../lib/audio
 import { formatFrameRate, resolveFrameRate } from '../lib/framerate';
 import { describeHardware, describePlan, detectHardware, planPipeline, type PipelinePlan } from '../lib/hardware';
 import { renderTitleOverlay } from '../lib/title-overlay';
+import {
+	alignContainerDate,
+	isPlausibleDate,
+	parseCreationDateFromName,
+	readContainerCreationDate,
+	resolveCreationDate,
+} from '../lib/video-date';
 import { renderClip, type ClipRenderJob, type ClipRenderResult, type ClipRenderSink } from './clip-renderer';
 import {
 	FALLBACK_SOURCE_HEIGHT,
@@ -155,6 +162,7 @@ async function probeFile(id: string, file: File): Promise<void> {
 		hasAudio: false,
 		codec: null,
 		createdAt: null,
+		createdAtSource: null,
 		thumbnail: null,
 	};
 
@@ -205,6 +213,19 @@ async function probeFile(id: string, file: File): Promise<void> {
 			createdAt = null;
 		}
 
+		// Most cameras leave the tag fields empty but still stamp the container header, so that
+		// header (Windows' "Media created") and finally the file name are tried before giving up.
+		let containerDate: number | null = null;
+		if (!isPlausibleDate(createdAt)) {
+			const raw = await readContainerCreationDate(file);
+			containerDate = raw === null ? null : alignContainerDate(raw, file.lastModified);
+		}
+		const recorded = resolveCreationDate({
+			metadataDate: createdAt,
+			containerDate,
+			filenameDate: parseCreationDateFromName(file.name),
+		});
+
 		const trimmedDuration = Math.max(0, duration - firstTimestamp);
 		const thumbnail = await makeThumbnail(videoTrack, width, height, firstTimestamp, trimmedDuration);
 
@@ -221,7 +242,8 @@ async function probeFile(id: string, file: File): Promise<void> {
 				frameRate,
 				hasAudio: Boolean(audioTrack),
 				codec,
-				createdAt,
+				createdAt: recorded.value,
+				createdAtSource: recorded.source,
 				thumbnail,
 			},
 		});
@@ -584,6 +606,13 @@ async function runMerge(request: MergeRequest): Promise<void> {
 					if (item.recordedAt === null) {
 						log(`"${item.name}" has no timestamp, so its mini map starts at the beginning of the track.`, 'warn');
 						continue;
+					}
+					if (item.recordedAtSource === 'modified') {
+						log(
+							`"${item.name}" carries no recording time, so its mini map is matched using the file's ` +
+								'modified time, which can be off.',
+							'warn',
+						);
 					}
 					const clipEnd = item.recordedAt + item.plannedSeconds * 1000;
 					if (clipEnd < firstGpsTime || item.recordedAt > lastGpsTime!) {

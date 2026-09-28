@@ -1,3 +1,5 @@
+import type { CreationDateSource } from './lib/video-date';
+
 export type Orientation = 'landscape' | 'portrait' | 'any';
 export type ClipOrientation = 'landscape' | 'portrait' | 'square';
 
@@ -67,6 +69,8 @@ export interface ProbeResult {
 	hasAudio: boolean;
 	codec: string | null;
 	createdAt: number | null;
+	/** Which of the possible clocks {@link createdAt} came from, or null when none had a date. */
+	createdAtSource: CreationDateSource | null;
 	/** Small JPEG preview of an early frame, or null when no frame could be decoded. */
 	thumbnail: Blob | null;
 }
@@ -114,10 +118,13 @@ export interface MergeItem {
 	/** Frame rate measured while probing, or null when it could not be determined. */
 	sourceFrameRate: number | null;
 	/**
-	 * Wall-clock time the clip was recorded at, taken from the video metadata and falling back to
-	 * the file's modified time. A timestamped GPS track is matched against this value.
+	 * Wall-clock time the clip was recorded at: the video metadata tag, else the container header
+	 * creation time, else a timestamp in the file name, else the file's modified time. A
+	 * timestamped GPS track is matched against this value.
 	 */
 	recordedAt: number | null;
+	/** Which clock {@link recordedAt} came from, used to flag less reliable GPS matches. */
+	recordedAtSource: CreationDateSource | null;
 }
 
 export type MergeTarget =
