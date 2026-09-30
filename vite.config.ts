@@ -17,6 +17,10 @@ export default defineConfig(({ mode }) => {
 	return {
 		// Relative base so the built app also works from a subfolder or from file-served static hosts.
 		base: './',
+		define: {
+			__APP_VERSION__: JSON.stringify(processEnv.npm_package_version ?? '1.0.0'),
+			__APP_BUILD_DATE__: JSON.stringify(new Date().toISOString()),
+		},
 		build: {
 			target: 'es2022',
 			sourcemap: false,

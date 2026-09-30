@@ -3,6 +3,7 @@ import { formatFrameRate, resolveFrameRate } from './lib/framerate';
 import { parseGpsFile } from './lib/gps';
 import { FACE_BLUR_LABELS } from './lib/face-blur';
 import { GpsMiniMap } from './lib/gps-map';
+import { formatOffset, isTimedTrack, planGpsMatches } from './lib/gps-match';
 import { describeHardware, detectHardware } from './lib/hardware';
 import { formatSize, isCropped, parseAspectRatio, resolveFitMode, resolveOutputSize } from './lib/resolution';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type AppSettings } from './lib/settings';
@@ -28,6 +29,7 @@ const PROBE_CONCURRENCY = 4;
 const PROBE_POOL_LIMIT = 4;
 /** Files this app produced (e.g. merged-20250904-101500.mp4) must not become inputs of the next run. */
 const OUTPUT_NAME_PATTERN = /^merged-\d{8}-\d{6}\.mp4$/i;
+const APP_NAME = 'Offline Auto Video Fusion';
 
 type ClipStatus = 'pending' | 'probing' | 'ready' | 'unreadable' | 'encoding' | 'merged' | 'failed';
 
@@ -55,6 +57,7 @@ const el = <T extends HTMLElement>(id: string): T => {
 const ui = {
 	themeToggle: el<HTMLButtonElement>('theme-toggle'),
 	themeColor: el<HTMLMetaElement>('theme-color'),
+	appVersion: el<HTMLSpanElement>('app-version'),
 	offlineBadge: el<HTMLSpanElement>('offline-badge'),
 	supportBadge: el<HTMLSpanElement>('support-badge'),
 	pickFolder: el<HTMLButtonElement>('pick-folder'),
@@ -86,6 +89,7 @@ const ui = {
 	gpsRotationValue: el<HTMLOutputElement>('gps-rotation-value'),
 	gpsOpacity: el<HTMLInputElement>('gps-opacity'),
 	gpsOpacityValue: el<HTMLOutputElement>('gps-opacity-value'),
+	gpsTolerance: el<HTMLSelectElement>('gps-tolerance'),
 	gpsInfoList: el<HTMLDivElement>('gps-info-list'),
 	gpsShowSpeed: el<HTMLInputElement>('gps-show-speed'),
 	gpsShowAltitude: el<HTMLInputElement>('gps-show-altitude'),
@@ -123,6 +127,17 @@ const ui = {
 	statClip: el<HTMLSpanElement>('stat-clip'),
 	log: el<HTMLDivElement>('log'),
 };
+
+const buildDate = new Date(__APP_BUILD_DATE__);
+const formattedBuildDate = new Intl.DateTimeFormat('en', {
+	year: 'numeric',
+	month: 'short',
+	day: 'numeric',
+	timeZone: 'UTC',
+}).format(buildDate);
+ui.appVersion.textContent = `v${__APP_VERSION__} · Updated ${formattedBuildDate}`;
+ui.appVersion.title = `Version ${__APP_VERSION__}, deployed ${buildDate.toLocaleString()}`;
+document.title = `${APP_NAME} v${__APP_VERSION__}`;
 
 const settings: AppSettings = loadSettings();
 let entries: ClipEntry[] = [];
@@ -233,6 +248,7 @@ const applySettingsToForm = () => {
 	ui.gpsRotationValue.value = `${settings.gpsMapRotation}°`;
 	ui.gpsOpacity.value = String(settings.gpsMapOpacity);
 	ui.gpsOpacityValue.value = `${settings.gpsMapOpacity}%`;
+	ui.gpsTolerance.value = String(settings.gpsMatchTolerance);
 	ui.gpsShowSpeed.checked = settings.gpsShowSpeed;
 	ui.gpsShowAltitude.checked = settings.gpsShowAltitude;
 	ui.gpsShowDistance.checked = settings.gpsShowDistance;
@@ -265,6 +281,8 @@ const readSettingsFromForm = () => {
 	ui.gpsRotationValue.value = `${settings.gpsMapRotation}°`;
 	settings.gpsMapOpacity = Math.min(100, Math.max(10, Math.round(Number(ui.gpsOpacity.value)) || DEFAULT_SETTINGS.gpsMapOpacity));
 	ui.gpsOpacityValue.value = `${settings.gpsMapOpacity}%`;
+	settings.gpsMatchTolerance = Math.max(0, Number(ui.gpsTolerance.value));
+	if (!Number.isFinite(settings.gpsMatchTolerance)) settings.gpsMatchTolerance = DEFAULT_SETTINGS.gpsMatchTolerance;
 	settings.gpsShowSpeed = ui.gpsShowSpeed.checked;
 	settings.gpsShowAltitude = ui.gpsShowAltitude.checked;
 	settings.gpsShowDistance = ui.gpsShowDistance.checked;
@@ -303,6 +321,7 @@ const mergeSettings = (): MergeSettings => ({
 	gpsMapRotation: settings.gpsMapRotation,
 	gpsMapOpacity: settings.gpsMapOpacity,
 	gpsInfoOrder: settings.gpsInfoOrder,
+	gpsMatchTolerance: settings.gpsMatchTolerance,
 	gpsShowSpeed: settings.gpsShowSpeed,
 	gpsShowAltitude: settings.gpsShowAltitude,
 	gpsShowDistance: settings.gpsShowDistance,
@@ -367,6 +386,8 @@ const previewGpsInput = (position = settings.gpsMapPosition, size = settings.gps
 	return {
 		points: gpsTrack.points,
 		clipStartTime: firstTime,
+		trackStartTime: firstTime,
+		matchToleranceMs: settings.gpsMatchTolerance * 60_000,
 		clipDuration: duration,
 		position,
 		size,
@@ -380,6 +401,24 @@ const previewGpsInput = (position = settings.gpsMapPosition, size = settings.gps
 		showCoordinates: settings.gpsShowCoordinates,
 		showDateTime: settings.gpsShowDateTime,
 	};
+};
+
+/** Summary fragment such as "GPS mini map (1,204 points · 6/7 clips matched, clock +9 h)". */
+const describeGpsMatches = (eligible: ClipEntry[], track: GpsTrack): string => {
+	const points = `${track.points.length.toLocaleString()} points`;
+	if (!isTimedTrack(track.points) || eligible.some((entry) => !entry.probe)) return `GPS mini map (${points})`;
+	const plan = planGpsMatches(
+		track.points,
+		eligible.map((entry) => ({
+			id: entry.id,
+			recordedAt: createdAtOf(entry),
+			durationMs: plannedSeconds(entry) * 1000,
+			location: entry.probe?.location ?? null,
+		})),
+		settings.gpsMatchTolerance,
+	);
+	const offset = plan.clockOffsetMs !== 0 ? `, clock ${formatOffset(plan.clockOffsetMs)}` : '';
+	return `GPS mini map (${points} · ${plan.matchedCount}/${eligible.length} clips matched${offset})`;
 };
 
 const drawPreviewBackground = (canvas: HTMLCanvasElement, label: string): CanvasRenderingContext2D | null => {
@@ -611,7 +650,7 @@ const updateSummary = () => {
 			` · ${settings.frameRate === 'auto' ? `auto ${formatFrameRate(resolvedFps)}` : formatFrameRate(resolvedFps)}` +
 			`${settings.stabilize === 'off' ? '' : ` · ${STABILIZER_LABELS[settings.stabilize]} stabilization`}` +
 			`${settings.faceBlur === 'off' ? '' : ` · ${FACE_BLUR_LABELS[settings.faceBlur]}`}` +
-			`${gpsTrack ? ` · GPS mini map (${gpsTrack.points.length} points)` : ''}` +
+			`${gpsTrack ? ` · ${describeGpsMatches(eligible, gpsTrack)}` : ''}` +
 			`${probing ? ' · still reading metadata…' : ''}` +
 			` · order: ${settings.sortKey} ${settings.sortDirection === 'asc' ? '↑' : '↓'}`;
 	}
@@ -813,6 +852,7 @@ const setBusy = (busy: boolean) => {
 		ui.gpsBackground,
 		ui.gpsRotation,
 		ui.gpsOpacity,
+		ui.gpsTolerance,
 		ui.gpsShowSpeed,
 		ui.gpsShowAltitude,
 		ui.gpsShowDistance,
@@ -1032,6 +1072,7 @@ const startMerge = async () => {
 				sourceFrameRate: entry.probe?.frameRate ?? null,
 				recordedAt: createdAtOf(entry),
 				recordedAtSource: createdAtSourceOf(entry),
+				recordedLocation: entry.probe?.location ?? null,
 			};
 		});
 
@@ -1160,6 +1201,7 @@ function handleWorkerError(event: ErrorEvent) {
 			codec: null,
 			createdAt: null,
 			createdAtSource: null,
+			location: null,
 			thumbnail: null,
 		});
 		pendingProbes.delete(id);
@@ -1227,6 +1269,7 @@ for (const control of [
 	ui.gpsBackground,
 	ui.gpsRotation,
 	ui.gpsOpacity,
+	ui.gpsTolerance,
 	ui.gpsShowSpeed,
 	ui.gpsShowAltitude,
 	ui.gpsShowDistance,

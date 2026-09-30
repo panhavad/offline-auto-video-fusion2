@@ -16,6 +16,7 @@ even when the server is gone.
 - [What it does](#what-it-does)
 - [How it stays fast and light on memory](#how-it-stays-fast-and-light-on-memory)
 - [Stabilization](#stabilization)
+- [GPS matching](#gps-matching)
 - [Face privacy](#face-privacy)
 - [Offline](#offline)
 - [Browser support](#browser-support)
@@ -188,7 +189,8 @@ instead.
 | Frame rate | Upper limit — source frames are never duplicated to reach it. *Auto* (default) matches the fastest selected clip, or falls back to a 120 fps limit when no source rate can be detected. |
 | Stabilizer | Software stabilization applied automatically to **every** clip. *Off* (default) skips it entirely; *Light* / *Standard* / *Strong* trade an increasing crop for an increasingly steady picture. See [Stabilization](#stabilization). |
 | Face privacy | Automatically finds human faces and hides them. *Off* (default) skips detection entirely; *Blur faces* / *Blur faces (strong)* soften them, *Pixelate faces* replaces them with blocks. See [Face privacy](#face-privacy). |
-| GPS mini map | An optional GPS group accepts GPX, KML, GeoJSON or CSV and previews the route in the shared output preview before merging. A timestamped track is matched purely by time: every frame looks up the track position for the clip's recording timestamp plus the elapsed time inside the clip. |
+| GPS mini map | An optional GPS group accepts GPX, KML, GeoJSON or CSV and previews the route in the shared output preview before merging. A timestamped track is matched by recording time: every frame looks up the track position for the clip's recording timestamp plus the elapsed time inside the clip, interpolated between the surrounding GPS fixes. See [GPS matching](#gps-matching). |
+| Time match tolerance | How long before the first or after the last GPS fix a clip may be recorded and still snap to that end of the route (default ±15 minutes; *Exact track time only* disables it). |
 | Mini map display | Places the overlay in any corner, defaults to 25% of the video width, sizes it from 15–50%, adjusts its opacity, rotates it through 0–359°, chooses a plain or illustrative offline-map background, and independently shows, hides, or reorders speed, altitude profile, traveled distance, coordinates, and the video's date and time. |
 | Acceleration | How much of the machine the merge may use. *Auto* (default) sizes the pipeline from the detected GPU, core count and memory; *Maximum* pushes further on a workstation; *Balanced* leaves headroom for other work; *Compatibility* falls back to the strictly sequential pipeline. The detected GPU is written to the log when the app starts. |
 
@@ -203,19 +205,22 @@ Quality, title shadow, and audio use their optimized defaults. Processing always
 encoding and falls back to software automatically when hardware encoding is not available.
 
 GPS CSV files need `latitude` and `longitude` columns and may also include `time`/`timestamp`,
-`elevation` and `speed` (metres per second). A timestamped point must have a timestamp on every row.
-Each clip's recording time is looked up in four steps: the video's creation metadata tag, then the
+`elevation` and `speed` (metres per second). Timestamps without a time zone
+(`2026-08-22 08:34:25`, `2026/08/22 08:34:25`) are read as local time. Points without a timestamp
+in an otherwise timed file (for example GPX waypoints next to the recorded track) are ignored.
+Each clip's recording time is looked up in four steps: the video's creation metadata tag
+(*CreateDate*, e.g. `com.apple.quicktime.creationdate`), then the
 container header creation time (what Windows Explorer shows as *Media created*, which is all most
 cameras write), then a timestamp in the file name (`VID_20240501_102233.mp4` and similar), and
-finally the file's modified time. The clip list shows where each date came from in the *Created*
-column tooltip, and the log summarises the mix after every scan. A clip whose time range falls
-outside the track shows no mini map (the merge log names it). Untimed routes are advanced across
+finally the file's modified time. Date-only tags (such as a bare year) are ignored because they are
+too coarse to match. The clip list shows where each date came from in the *Created*
+column tooltip, and the log summarises the mix after every scan. Untimed routes are advanced across
 each clip by relative progress. The mini map uses no online map tiles, so GPS rendering remains
 private and works offline. Its built-in cartographic background adds illustrative streets, blocks,
 water and a rotating north indicator for visual route context; it is not live road data. Enabling
 *Altitude graph* adds the complete elevation profile under the route, with a moving progress marker
-and the current interpolated altitude. Enabling *Date & time* shows the GPS clock the frame was
-matched to and advances it with each frame.
+and the current interpolated altitude. Enabling *Date & time* shows the video's own recording time
+and advances it with each frame.
 Altitude, distance, and date/time are enabled by default. Use the arrow controls to set their
 top-to-bottom order. Click the preview, or its *Full screen* button, to inspect it full screen.
 
@@ -384,6 +389,37 @@ merged unstabilized and a warning is logged; the same happens if OpenCV fails to
 is never allowed to cost you a clip.
 
 
+## GPS matching
+
+With a timestamped GPS track loaded, each clip is placed on the route by its recording time
+(*CreateDate*, falling back to *Media created*; see [Using the app](#using-the-app)):
+
+1. **Nearest-neighbour lookup.** The clip time is found on the sorted GPS timeline with a binary
+   search, so exact matches are not required. Clip times and GPS fixes rarely coincide to the second.
+2. **Interpolation.** Between two fixes the latitude, longitude, altitude and speed are linearly
+   interpolated for the exact frame time, so the marker moves smoothly and sub-sample precise even
+   when the logger records only every few seconds. Clips that fall inside a long gap in the
+   recording (signal loss, paused logger) are still interpolated between the surrounding fixes and
+   the log mentions the gap.
+3. **Tolerance threshold.** A clip recorded shortly before the logger started or after it stopped
+   snaps to the nearest end of the route as long as it is within the *Time match tolerance*
+   (default ±15 minutes). Several clips may therefore show (almost) the same point, which is
+   expected. Clips beyond the tolerance show no mini map.
+4. **Clock correction.** When the camera clock or the GPS file is off by a time-zone step (for
+   example local time written as UTC), the offset in 15-minute steps up to ±14 hours that best fits
+   the clips is detected and applied for matching. Clips with an embedded location (iPhone and most
+   Android phones write one) make this reliable: a shift is only applied when it makes clearly more
+   clips agree with where the camera said it was. Without locations a shift is only considered when
+   no clip matches the track at all.
+5. **Location check and rescue.** If a clip's embedded location is more than 300 m from the
+   time-matched position, or its time does not fit the track, the clip is placed at the closest
+   pass of the route within 500 m of that location instead (on out-and-back routes, the pass closest
+   in time wins). Locations less accurate than 200 m are ignored.
+
+The summary line shows how many clips matched (for example *6/7 clips matched, clock +9 h*), and
+the merge log lists how each clip was placed.
+
+
 ## Face privacy
 
 *Face privacy* finds human faces in every clip and hides them in the merged video, so footage can
@@ -495,6 +531,8 @@ src/lib/face-blur.ts           Haar face detection, box tracking, and the blur/p
 src/assets/                    the bundled face detection model (OpenCV Haar cascade)
 src/lib/opencv.ts              lazy OpenCV.js loader (isolates its thenable module object)
 src/lib/audio.ts               normalizes any channel layout / sample rate to 48 kHz stereo
+src/lib/video-date.ts          recording time (CreateDate / Media created) and embedded location
+src/lib/gps-match.ts           clip ↔ GPS matching: nearest-neighbour, interpolation, clock correction
 src/lib/                       formatting helpers and persisted settings
 src/dev/test-media.ts          dev-only fixture generator (not part of the bundle)
 scripts/build-sw.mjs           generates dist/sw.js with the precache manifest

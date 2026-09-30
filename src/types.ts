@@ -57,6 +57,12 @@ export interface GeoPoint {
 	longitude: number;
 }
 
+/** Where the camera says a clip was recorded (e.g. QuickTime ISO 6709 location tag). */
+export interface RecordedLocation extends GeoPoint {
+	/** Horizontal accuracy in metres, when the camera reported one. */
+	accuracy: number | null;
+}
+
 export interface ProbeResult {
 	ok: boolean;
 	error?: string;
@@ -71,6 +77,8 @@ export interface ProbeResult {
 	createdAt: number | null;
 	/** Which of the possible clocks {@link createdAt} came from, or null when none had a date. */
 	createdAtSource: CreationDateSource | null;
+	/** Location embedded in the video by the camera, or null when there is none. */
+	location: RecordedLocation | null;
 	/** Small JPEG preview of an early frame, or null when no frame could be decoded. */
 	thumbnail: Blob | null;
 }
@@ -102,6 +110,11 @@ export interface MergeSettings {
 	/** Opacity of the complete mini-map overlay as a percentage. */
 	gpsMapOpacity: number;
 	gpsInfoOrder: GpsInfoItem[];
+	/**
+	 * Minutes a clip may be recorded before the first or after the last GPS fix and still snap to
+	 * that end of the track.
+	 */
+	gpsMatchTolerance: number;
 	gpsShowSpeed: boolean;
 	gpsShowAltitude: boolean;
 	gpsShowDistance: boolean;
@@ -125,6 +138,8 @@ export interface MergeItem {
 	recordedAt: number | null;
 	/** Which clock {@link recordedAt} came from, used to flag less reliable GPS matches. */
 	recordedAtSource: CreationDateSource | null;
+	/** Location embedded in the clip, used to verify and rescue GPS matches. */
+	recordedLocation: RecordedLocation | null;
 }
 
 export type MergeTarget =

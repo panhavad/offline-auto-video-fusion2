@@ -55,8 +55,18 @@ import {
 	isPlausibleDate,
 	parseCreationDateFromName,
 	readContainerCreationDate,
+	readMetadataCreationDate,
+	readRecordedLocation,
 	resolveCreationDate,
 } from '../lib/video-date';
+import {
+	LONG_GPS_GAP_MS,
+	formatOffset,
+	formatSpan,
+	isTimedTrack,
+	planGpsMatches,
+	type GpsMatchPlan,
+} from '../lib/gps-match';
 import { renderClip, type ClipRenderJob, type ClipRenderResult, type ClipRenderSink } from './clip-renderer';
 import {
 	FALLBACK_SOURCE_HEIGHT,
@@ -163,6 +173,7 @@ async function probeFile(id: string, file: File): Promise<void> {
 		codec: null,
 		createdAt: null,
 		createdAtSource: null,
+		location: null,
 		thumbnail: null,
 	};
 
@@ -203,12 +214,14 @@ async function probeFile(id: string, file: File): Promise<void> {
 			frameRate = null;
 		}
 
+		// The "CreateDate" tag is the true start of the recording; the container header is often
+		// stamped when the file was finalised or edited, so it is only the fallback.
 		let createdAt: number | null = null;
+		let location: ProbeResult['location'] = null;
 		try {
 			const tags = await input.getMetadataTags();
-			if (tags.date instanceof Date && !Number.isNaN(tags.date.getTime())) {
-				createdAt = tags.date.getTime();
-			}
+			createdAt = readMetadataCreationDate(tags);
+			location = readRecordedLocation(tags.raw);
 		} catch {
 			createdAt = null;
 		}
@@ -244,6 +257,7 @@ async function probeFile(id: string, file: File): Promise<void> {
 				codec,
 				createdAt: recorded.value,
 				createdAtSource: recorded.source,
+				location,
 				thumbnail,
 			},
 		});
@@ -594,32 +608,74 @@ async function runMerge(request: MergeRequest): Promise<void> {
 		// In auto mode the cap comes from the footage itself, so the usual hairline tolerance is
 		// widened: timestamp jitter in a nominally constant-rate source must not cost frames.
 		const minFrameSpacing = settings.frameRate === 'auto' ? frameInterval * 0.9 : frameInterval - 1e-4;
+		let gpsPlan: GpsMatchPlan | null = null;
 		if (gpsTrack) {
 			const firstGpsTime = gpsTrack.points[0].timestamp;
 			const lastGpsTime = gpsTrack.points[gpsTrack.points.length - 1].timestamp;
-			if (firstGpsTime === null) {
+			if (!isTimedTrack(gpsTrack.points) || firstGpsTime === null || lastGpsTime === null) {
 				log(`GPS mini map: "${gpsTrack.name}" has no timestamps, so its route follows each clip's progress.`, 'warn');
 			} else {
-				const trackRange = `${new Date(firstGpsTime).toLocaleString()} → ${new Date(lastGpsTime!).toLocaleString()}`;
-				log(`GPS mini map: "${gpsTrack.name}" is matched by timestamp (${trackRange}).`);
+				const trackRange = `${new Date(firstGpsTime).toLocaleString()} → ${new Date(lastGpsTime).toLocaleString()}`;
+				gpsPlan = planGpsMatches(
+					gpsTrack.points,
+					items.map((item) => ({
+						id: item.id,
+						recordedAt: item.recordedAt,
+						durationMs: item.plannedSeconds * 1000,
+						location: item.recordedLocation,
+					})),
+					settings.gpsMatchTolerance,
+				);
+				log(
+					`GPS mini map: "${gpsTrack.name}" is matched by recording time (${trackRange}); ` +
+						`${gpsPlan.matchedCount}/${items.length} clips matched, tolerance ` +
+						`${settings.gpsMatchTolerance > 0 ? `±${settings.gpsMatchTolerance} min` : 'off'}.`,
+				);
+				if (gpsPlan.clockOffsetMs !== 0) {
+					log(
+						`GPS mini map: the video clock and the GPS clock disagree by ${formatOffset(gpsPlan.clockOffsetMs)} ` +
+							`(detected from ${gpsPlan.offsetEvidence === 'location' ? "the clips' embedded locations" : 'the time ranges'}); ` +
+							'recording times are shifted by that amount for matching.',
+						'warn',
+					);
+				}
 				for (const item of items) {
-					if (item.recordedAt === null) {
-						log(`"${item.name}" has no timestamp, so its mini map starts at the beginning of the track.`, 'warn');
-						continue;
-					}
-					if (item.recordedAtSource === 'modified') {
+					const match = gpsPlan.matches.get(item.id);
+					if (!match) continue;
+					const when = item.recordedAt === null ? 'no time' : new Date(item.recordedAt).toLocaleString();
+					if (item.recordedAtSource === 'modified' && match.method !== 'location') {
 						log(
 							`"${item.name}" carries no recording time, so its mini map is matched using the file's ` +
 								'modified time, which can be off.',
 							'warn',
 						);
 					}
-					const clipEnd = item.recordedAt + item.plannedSeconds * 1000;
-					if (clipEnd < firstGpsTime || item.recordedAt > lastGpsTime!) {
+					if (match.method === 'none') {
 						log(
-							`"${item.name}" (${new Date(item.recordedAt).toLocaleString()}) falls outside the GPS track's ` +
-								'time range; its mini map will be hidden.',
+							`"${item.name}" (${when}) is more than ${formatSpan(gpsPlan.toleranceMs)} outside the GPS track` +
+								`${item.recordedLocation ? ' and was not filmed near the route' : ''}; its mini map will be hidden.`,
 							'warn',
+						);
+					} else if (match.method === 'track-start') {
+						log(`"${item.name}" has no timestamp, so its mini map starts at the beginning of the track.`, 'warn');
+					} else if (match.method === 'location') {
+						log(
+							`"${item.name}" (${when}) is placed by its embedded location ` +
+								`(${Math.round(match.locationErrorMetres ?? 0)} m from the route)` +
+								(match.timeMatchErrorMetres !== null
+									? `; its recording time pointed ${Math.round(match.timeMatchErrorMetres)} m away.`
+									: '; its recording time is outside the GPS track.'),
+						);
+					} else if (match.method === 'nearest') {
+						log(
+							`"${item.name}" (${when}) is ${formatSpan(match.fixDistanceMs ?? 0)} outside the GPS track; ` +
+								'its mini map snaps to the nearest end of the route.',
+						);
+					} else if (match.gapMs > LONG_GPS_GAP_MS && (match.fixDistanceMs ?? 0) > 60_000) {
+						log(
+							`"${item.name}" (${when}) falls in a ${formatSpan(match.gapMs)} gap of the GPS recording ` +
+								`(nearest fix ${formatSpan(match.fixDistanceMs ?? 0)} away); its position is interpolated ` +
+								'between the surrounding fixes.',
 						);
 					}
 				}
@@ -710,6 +766,8 @@ async function runMerge(request: MergeRequest): Promise<void> {
 				? {
 						points: gpsTrack.points,
 						clipStartTime: item.recordedAt,
+						trackStartTime: gpsPlan?.matches.get(item.id)?.trackStartTime ?? item.recordedAt,
+						matchToleranceMs: gpsPlan?.matches.get(item.id)?.toleranceMs ?? settings.gpsMatchTolerance * 60_000,
 						clipDuration: item.plannedSeconds,
 						position: settings.gpsMapPosition,
 						size: settings.gpsMapSize,

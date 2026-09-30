@@ -1,6 +1,9 @@
 export {};
 
 declare global {
+	const __APP_VERSION__: string;
+	const __APP_BUILD_DATE__: string;
+
 	interface FilePickerAcceptType {
 		description?: string;
 		accept: Record<string, string[]>;

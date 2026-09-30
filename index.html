@@ -22,6 +22,7 @@
 				</div>
 			</div>
 			<div class="badges">
+				<span id="app-version" class="pill pill-muted" title="Application version and deployment date">v1.0.0</span>
 				<button id="theme-toggle" class="btn btn-white theme-toggle" type="button" aria-pressed="false">Dark mode</button>
 				<span id="offline-badge" class="pill pill-muted" title="Offline availability">Offline: checking…</span>
 				<span id="support-badge" class="pill pill-muted hidden" title="Browser capabilities"></span>
@@ -223,6 +224,19 @@
 								<input type="range" id="gps-opacity" min="10" max="100" step="1" />
 								<span class="rotation-marks" aria-hidden="true"><span>10%</span><span>50%</span><span>100%</span></span>
 							</label>
+							<label class="field field-gps-tolerance">
+								<span class="field-label">Time match tolerance</span>
+								<select id="gps-tolerance">
+									<option value="0">Exact track time only</option>
+									<option value="1">± 1 minute</option>
+									<option value="5">± 5 minutes</option>
+									<option value="15">± 15 minutes</option>
+									<option value="30">± 30 minutes</option>
+									<option value="60">± 1 hour</option>
+									<option value="180">± 3 hours</option>
+								</select>
+								<span class="muted small">Clips recorded this long before the first or after the last GPS fix snap to the nearest end of the route. Positions between fixes are always interpolated.</span>
+							</label>
 							<fieldset class="gps-info">
 								<legend>Information shown (top to bottom)</legend>
 								<div id="gps-info-list" class="gps-info-list">
@@ -234,7 +248,7 @@
 										<label class="check"><input type="checkbox" id="gps-show-distance" /><span>Distance</span></label>
 										<span class="gps-order-actions"><button class="btn btn-white gps-order-button" type="button" data-direction="up" aria-label="Move distance up">↑</button><button class="btn btn-white gps-order-button" type="button" data-direction="down" aria-label="Move distance down">↓</button></span>
 									</div>
-									<div class="gps-info-item" data-gps-info="date-time" title="Shows the GPS clock each frame is matched to">
+									<div class="gps-info-item" data-gps-info="date-time" title="Shows the video's own recording time for each frame">
 										<label class="check"><input type="checkbox" id="gps-show-date-time" /><span>Date &amp; time</span></label>
 										<span class="gps-order-actions"><button class="btn btn-white gps-order-button" type="button" data-direction="up" aria-label="Move date and time up">↑</button><button class="btn btn-white gps-order-button" type="button" data-direction="down" aria-label="Move date and time down">↓</button></span>
 									</div>

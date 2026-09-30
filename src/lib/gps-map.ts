@@ -1,12 +1,21 @@
-import type { GeoPoint, GpsInfoItem, GpsMapBackground, GpsMapPosition, GpsPoint } from '../types';
+import type { GpsInfoItem, GpsMapBackground, GpsMapPosition, GpsPoint } from '../types';
+import { distanceMetres, sampleTrackAt } from './gps-match';
 
 export interface GpsOverlayInput {
 	points: GpsPoint[];
 	/**
-	 * Wall-clock time the clip starts at, in milliseconds since the epoch. A timestamped track is
-	 * matched against this value, so the mini map always shows where the camera was at that moment.
+	 * Wall-clock time the clip starts at, in milliseconds since the epoch, as read from the video.
+	 * It drives the date & time readout.
 	 */
 	clipStartTime: number | null;
+	/**
+	 * Point on the GPS timeline the clip's first frame is matched to (see `planGpsMatches`); every
+	 * frame shows the track position at this time plus the elapsed seconds. Falls back to
+	 * {@link clipStartTime} when null.
+	 */
+	trackStartTime: number | null;
+	/** How far outside the track a frame may be and still snap to the track's nearest end. */
+	matchToleranceMs: number;
 	clipDuration: number;
 	position: GpsMapPosition;
 	size: number;
@@ -22,13 +31,6 @@ export interface GpsOverlayInput {
 }
 
 type DrawingContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
-
-const distanceMetres = (a: GeoPoint, b: GeoPoint): number => {
-	const latitudeScale = Math.cos(((a.latitude + b.latitude) * Math.PI) / 360);
-	const x = (b.longitude - a.longitude) * latitudeScale;
-	const y = b.latitude - a.latitude;
-	return Math.hypot(x, y) * 111_320;
-};
 
 interface PositionedGpsPoint extends GpsPoint {
 	x: number;
@@ -63,11 +65,13 @@ export class GpsMiniMap {
 		frameWidth: number,
 		frameHeight: number,
 	) {
-		// A timestamped track is driven by the clip's own wall clock: the route position for any
-		// frame is looked up by (clip start time + elapsed seconds). Tracks without timestamps fall
-		// back to following the clip's progress from end to end.
+		// A timestamped track is driven by the clip's matched position on the GPS timeline: the route
+		// position for any frame is looked up by (matched start time + elapsed seconds). Tracks
+		// without timestamps fall back to following the clip's progress from end to end.
 		const trackIsTimed = input.points[0].timestamp !== null;
-		this.startTime = trackIsTimed ? input.clipStartTime ?? input.points[0].timestamp : null;
+		this.startTime = trackIsTimed
+			? input.trackStartTime ?? input.clipStartTime ?? input.points[0].timestamp
+			: null;
 		const hasClock = this.startTime !== null || input.clipStartTime !== null;
 		const hasAltitudeGraph = input.showAltitude && input.points.some((point) => point.elevation !== null);
 		const activeInformation = input.informationOrder.filter((item) => {
@@ -333,32 +337,38 @@ export class GpsMiniMap {
 	}
 
 	private pointAt(seconds: number): { point: PositionedGpsPoint; speed: number | null; upperIndex: number } | null {
-		const timed = this.startTime !== null;
-		const target = timed
-			? this.startTime! + seconds * 1000
-			: Math.min(1, seconds / Math.max(this.input.clipDuration, 0.001)) * (this.points.length - 1);
-		const first = timed ? this.points[0].timestamp! : 0;
-		const last = timed ? this.points[this.points.length - 1].timestamp! : this.points.length - 1;
-		if (target < first || target > last) return null;
+		if (this.startTime !== null) {
+			// Nearest-neighbour lookup on the GPS timeline with interpolation between fixes; frames
+			// just outside the track snap to its nearest end within the match tolerance.
+			const sample = sampleTrackAt(this.points, this.startTime + seconds * 1000, this.input.matchToleranceMs);
+			if (!sample) return null;
+			const before = this.points[sample.lowerIndex];
+			const after = this.points[sample.upperIndex];
+			const interpolate = (a: number, b: number) => a + (b - a) * sample.ratio;
+			return {
+				point: {
+					latitude: sample.latitude,
+					longitude: sample.longitude,
+					elevation: sample.elevation,
+					speed: sample.speed,
+					timestamp: sample.timestamp,
+					x: interpolate(before.x, after.x),
+					y: interpolate(before.y, after.y),
+					distance: interpolate(before.distance, after.distance),
+				},
+				speed: sample.speed,
+				upperIndex: sample.ratio >= 1 ? sample.upperIndex + 1 : sample.upperIndex,
+			};
+		}
 
-		let low = 1;
-		let high = this.points.length - 1;
-		while (low < high) {
-			const middle = Math.floor((low + high) / 2);
-			if ((timed ? this.points[middle].timestamp! : middle) < target) low = middle + 1;
-			else high = middle;
-		}
-		const upper = low;
-		const before = this.points[Math.max(0, upper - 1)];
-		const after = this.points[Math.min(upper, this.points.length - 1)];
-		const beforeValue = timed ? before.timestamp! : upper - 1;
-		const afterValue = timed ? after.timestamp! : upper;
-		const ratio = afterValue === beforeValue ? 0 : (target - beforeValue) / (afterValue - beforeValue);
+		const target = Math.min(1, seconds / Math.max(this.input.clipDuration, 0.001)) * (this.points.length - 1);
+		if (target < 0) return null;
+		const upper = Math.min(this.points.length - 1, Math.max(1, Math.ceil(target)));
+		const before = this.points[upper - 1];
+		const after = this.points[upper];
+		const ratio = Math.min(1, Math.max(0, target - (upper - 1)));
 		const interpolate = (a: number, b: number) => a + (b - a) * ratio;
-		let speed = before.speed ?? after.speed;
-		if (speed === null && timed && after.timestamp! > before.timestamp!) {
-			speed = distanceMetres(before, after) / ((after.timestamp! - before.timestamp!) / 1000);
-		}
+		const speed = before.speed ?? after.speed;
 		return {
 			point: {
 				latitude: interpolate(before.latitude, after.latitude),
@@ -367,7 +377,7 @@ export class GpsMiniMap {
 					? before.elevation ?? after.elevation
 					: interpolate(before.elevation, after.elevation),
 				speed,
-				timestamp: timed ? target : null,
+				timestamp: null,
 				x: interpolate(before.x, after.x),
 				y: interpolate(before.y, after.y),
 				distance: interpolate(before.distance, after.distance),
@@ -455,10 +465,10 @@ export class GpsMiniMap {
 				} else if (item === 'coordinates') {
 					label = `${current.point.latitude.toFixed(5)}, ${current.point.longitude.toFixed(5)}`;
 				} else if (item === 'date-time') {
-					// Prefer the GPS clock the frame was matched to; untimed tracks fall back to the
-					// clip's own wall clock.
-					const clock = current.point.timestamp ??
-						(this.input.clipStartTime === null ? null : this.input.clipStartTime + seconds * 1000);
+					// The video's own recording clock; untimed clips fall back to the matched GPS time.
+					const clock = this.input.clipStartTime !== null
+						? this.input.clipStartTime + seconds * 1000
+						: current.point.timestamp;
 					if (clock !== null) {
 						const date = new Date(clock);
 						const pad = (value: number) => String(value).padStart(2, '0');

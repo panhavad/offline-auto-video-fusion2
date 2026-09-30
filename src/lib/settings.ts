@@ -12,6 +12,7 @@ import type {
 	SortKey,
 	StabilizerSetting,
 } from '../types';
+import { DEFAULT_GPS_MATCH_TOLERANCE_MINUTES, GPS_MATCH_TOLERANCE_OPTIONS } from './gps-match';
 
 const STORAGE_KEY = 'auto-video-fusion:settings:v1';
 
@@ -84,6 +85,11 @@ const sanitizeGpsMapBackground = (value: unknown): GpsMapBackground =>
 		? (value as GpsMapBackground)
 		: DEFAULT_SETTINGS.gpsMapBackground;
 
+const sanitizeGpsMatchTolerance = (value: unknown): number => {
+	const numeric = Number(value);
+	return GPS_MATCH_TOLERANCE_OPTIONS.includes(numeric) ? numeric : DEFAULT_SETTINGS.gpsMatchTolerance;
+};
+
 const isGpsInfoItem = (value: unknown): value is GpsInfoItem =>
 	typeof value === 'string' && DEFAULT_GPS_INFO_ORDER.some((item) => item === value);
 
@@ -130,6 +136,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	gpsMapBackground: 'map',
 	gpsMapOpacity: 90,
 	gpsInfoOrder: [...DEFAULT_GPS_INFO_ORDER],
+	gpsMatchTolerance: DEFAULT_GPS_MATCH_TOLERANCE_MINUTES,
 	gpsShowSpeed: false,
 	gpsShowAltitude: true,
 	gpsShowDistance: true,
@@ -166,6 +173,7 @@ export const loadSettings = (): AppSettings => {
 			gpsMapBackground: sanitizeGpsMapBackground(parsed.gpsMapBackground),
 			gpsMapOpacity: sanitizeGpsMapOpacity(parsed.gpsMapOpacity),
 			gpsInfoOrder: sanitizeGpsInfoOrder(parsed.gpsInfoOrder),
+			gpsMatchTolerance: sanitizeGpsMatchTolerance(parsed.gpsMatchTolerance),
 			gpsShowSpeed: parsed.gpsShowSpeed ?? DEFAULT_SETTINGS.gpsShowSpeed,
 			gpsShowAltitude: parsed.gpsShowAltitude ?? DEFAULT_SETTINGS.gpsShowAltitude,
 			gpsShowDistance: parsed.gpsShowDistance ?? DEFAULT_SETTINGS.gpsShowDistance,

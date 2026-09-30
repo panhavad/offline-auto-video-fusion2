@@ -1,4 +1,5 @@
 import type { GpsPoint, GpsTrack } from '../types';
+import { parseCreationDateTag } from './video-date';
 
 const LATITUDE_KEYS = ['latitude', 'lat'];
 const LONGITUDE_KEYS = ['longitude', 'lon', 'lng', 'long'];
@@ -16,11 +17,19 @@ const timestamp = (value: unknown): number | null => {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value < 10_000_000_000 ? value * 1000 : value;
 	}
-	const numeric = Number(value);
-	if (Number.isFinite(numeric) && String(value).trim() !== '') {
+	const text = String(value).trim();
+	if (text === '') return null;
+	const numeric = Number(text);
+	if (Number.isFinite(numeric)) {
 		return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
 	}
-	const parsed = Date.parse(String(value));
+	// `2026/08/22 08:34:25` and `2026-08-22 08:34:25` are common in CSV exports; without a zone they
+	// are local wall-clock time, parsed the same way in every browser.
+	const normalized = text.replace(
+		/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})/,
+		(_, year: string, month: string, day: string) => `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`,
+	);
+	const parsed = parseCreationDateTag(normalized) ?? Date.parse(normalized);
 	return Number.isNaN(parsed) ? null : parsed;
 };
 
@@ -36,18 +45,26 @@ const cleanTrack = (name: string, points: GpsPoint[]): GpsTrack => {
 	const valid = points.filter(validPoint);
 	if (valid.length < 2) throw new Error('The GPS file must contain at least two valid coordinates.');
 	const timed = valid.filter((point) => point.timestamp !== null);
-	if (timed.length > 0 && timed.length !== valid.length) {
-		throw new Error('Every GPS point must have a timestamp when any point has one.');
+	if (timed.length >= 2) {
+		// Untimed extras (waypoints, stray rows) cannot be placed on the timeline, so they are
+		// dropped. A stable sort keeps the recorded order of fixes that share a timestamp.
+		timed.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+		return { name, points: timed };
 	}
-	if (timed.length === valid.length) valid.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
-	return { name, points: valid };
+	return { name, points: valid.map((point) => ({ ...point, timestamp: null })) };
 };
 
 const parseXml = (fileName: string, text: string): GpsTrack => {
 	const document_ = new DOMParser().parseFromString(text, 'application/xml');
 	if (document_.querySelector('parsererror')) throw new Error('The GPS XML file is not valid.');
 
-	const nodes = Array.from(document_.querySelectorAll('trkpt, rtept, wpt'));
+	// A recorded track is what clips are matched against; routes and waypoints are only used when
+	// the file has no track, so untimed landmarks never mix with the timed fixes.
+	const trackPoints = Array.from(document_.querySelectorAll('trkpt'));
+	const routePoints = trackPoints.length > 0 ? [] : Array.from(document_.querySelectorAll('rtept'));
+	const nodes = trackPoints.length > 0
+		? trackPoints
+		: routePoints.length > 0 ? routePoints : Array.from(document_.querySelectorAll('wpt'));
 	if (nodes.length > 0) {
 		return cleanTrack(
 			fileName,

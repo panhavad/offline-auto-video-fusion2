@@ -451,7 +451,8 @@ main {
 }
 
 .field-gps-rotation,
-.field-gps-opacity {
+.field-gps-opacity,
+.field-gps-tolerance {
 	max-width: 380px;
 }
 

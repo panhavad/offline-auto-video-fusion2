@@ -9,6 +9,8 @@
  * and friends) are the last resort before the file's modified time.
  */
 
+import type { RecordedLocation } from '../types';
+
 /** Where a clip's recording time came from, in the order the sources are tried. */
 export type CreationDateSource = 'metadata' | 'container' | 'filename' | 'modified';
 
@@ -216,4 +218,127 @@ export const CREATION_DATE_SOURCE_LABELS: Record<CreationDateSource, string> = {
 	container: 'container "Media created" time',
 	filename: 'file name',
 	modified: 'file modified time',
+};
+
+type RawTags = Record<string, unknown> | undefined;
+
+/** Tag keys that carry the recording start, most specific first. */
+const CREATION_DATE_KEYS = ['com.apple.quicktime.creationdate', '\u00A9day', 'creation_time', 'date'];
+
+const ISO_DATE_TIME_PATTERN =
+	/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:[.,](\d{1,9}))?)?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/i;
+
+const tagText = (value: unknown): string | null => {
+	if (typeof value === 'string') return value.replace(/\0+$/, '').trim() || null;
+	if (value instanceof Uint8Array) {
+		try {
+			return new TextDecoder().decode(value).replace(/\0+$/, '').trim() || null;
+		} catch {
+			return null;
+		}
+	}
+	return null;
+};
+
+/**
+ * Parses a creation-date tag such as `2026-08-22T08:34:25+0900` (QuickTime "CreateDate") or
+ * `2024-05-01T10:22:33.000000Z`. Values without a time of day (`©day = "2024"`) are too coarse to
+ * match against GPS and are rejected; values without a zone are taken as local wall-clock time.
+ */
+export const parseCreationDateTag = (text: string): number | null => {
+	const match = ISO_DATE_TIME_PATTERN.exec(text.trim());
+	let milliseconds: number;
+	if (match) {
+		const [, year, month, day, hour, minute, second = '0', fraction = '0', zone] = match;
+		const millis = Math.round(Number(`0.${fraction}`) * 1000);
+		const fields = [Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), millis] as const;
+		if (!zone) {
+			milliseconds = new Date(...fields).getTime();
+		} else {
+			milliseconds = Date.UTC(...fields);
+			if (zone.toUpperCase() !== 'Z') {
+				const digits = zone.slice(1).replace(':', '');
+				const offsetMinutes = Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4) || '0');
+				milliseconds -= (zone[0] === '-' ? -1 : 1) * offsetMinutes * 60_000;
+			}
+		}
+	} else {
+		if (!/\d{1,2}:\d{2}/.test(text)) return null;
+		milliseconds = Date.parse(text);
+	}
+	return isPlausibleDate(milliseconds) ? milliseconds : null;
+};
+
+/**
+ * Reads the recording start from the metadata tags ("CreateDate"). The raw tags are parsed here
+ * rather than trusting the demuxer's `date`, which also accepts year-only values.
+ */
+export const readMetadataCreationDate = (tags: { date?: Date; raw?: RawTags }): number | null => {
+	let sawCandidate = false;
+	for (const key of CREATION_DATE_KEYS) {
+		const text = tagText(tags.raw?.[key]);
+		if (!text) continue;
+		sawCandidate = true;
+		const parsed = parseCreationDateTag(text);
+		if (parsed !== null) return parsed;
+	}
+	if (sawCandidate) return null;
+	const date = tags.date instanceof Date ? tags.date.getTime() : null;
+	return isPlausibleDate(date) ? date : null;
+};
+
+/** One ISO 6709 coordinate: `±DD.DDD`, `±DDMM.MMM` or `±DDMMSS.SS` (three degree digits for longitude). */
+const parseIso6709Part = (part: string, degreeDigits: number): number | null => {
+	const sign = part[0] === '-' ? -1 : 1;
+	const body = part.slice(1);
+	const [integer, fraction = ''] = body.split('.');
+	const tail = fraction ? `.${fraction}` : '';
+	let value: number;
+	if (integer.length <= degreeDigits) {
+		value = Number(body);
+	} else if (integer.length === degreeDigits + 2) {
+		value = Number(integer.slice(0, degreeDigits)) + Number(integer.slice(degreeDigits) + tail) / 60;
+	} else if (integer.length === degreeDigits + 4) {
+		value =
+			Number(integer.slice(0, degreeDigits)) +
+			Number(integer.slice(degreeDigits, degreeDigits + 2)) / 60 +
+			Number(integer.slice(degreeDigits + 2) + tail) / 3600;
+	} else {
+		return null;
+	}
+	return Number.isFinite(value) ? sign * value : null;
+};
+
+/** Parses an ISO 6709 string such as `+35.8013+139.1830+249.254/`. */
+export const parseIso6709 = (text: string): { latitude: number; longitude: number } | null => {
+	const match = /^\s*([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)/.exec(text);
+	if (!match) return null;
+	const latitude = parseIso6709Part(match[1], 2);
+	const longitude = parseIso6709Part(match[2], 3);
+	if (latitude === null || longitude === null) return null;
+	if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return null;
+	// 0,0 is the placeholder some cameras write when they have no fix.
+	if (latitude === 0 && longitude === 0) return null;
+	return { latitude, longitude };
+};
+
+/**
+ * Reads where the camera says the clip was recorded: the QuickTime
+ * `com.apple.quicktime.location.ISO6709` key (iPhone and most Android phones) or the `©xyz` user
+ * data atom, together with the reported horizontal accuracy when present.
+ */
+export const readRecordedLocation = (raw: RawTags): RecordedLocation | null => {
+	if (!raw) return null;
+	let location: { latitude: number; longitude: number } | null = null;
+	for (const [key, value] of Object.entries(raw)) {
+		const lower = key.toLowerCase();
+		if (!lower.includes('iso6709') && lower !== '\u00A9xyz' && lower !== 'location') continue;
+		const text = tagText(value);
+		location = text ? parseIso6709(text) : null;
+		if (location) break;
+	}
+	if (!location) return null;
+	const accuracyText = tagText(raw['com.apple.quicktime.location.accuracy.horizontal']);
+	const accuracy = accuracyText === null ? null : Number.parseFloat(accuracyText);
+	return { ...location, accuracy: accuracy !== null && Number.isFinite(accuracy) && accuracy >= 0 ? accuracy : null };
 };
