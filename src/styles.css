@@ -730,6 +730,61 @@ tbody tr.active {
 	width: 42px;
 }
 
+#clip-table.manual-order .col-order {
+	width: 118px;
+}
+
+.col-order .order-number {
+	display: inline-block;
+	min-width: 1.6em;
+}
+
+.drag-handle {
+	display: inline-block;
+	margin-right: 4px;
+	color: var(--muted);
+	cursor: grab;
+	user-select: none;
+}
+
+tbody tr[draggable="true"] {
+	cursor: grab;
+}
+
+tbody tr[draggable="true"] input,
+tbody tr[draggable="true"] button {
+	cursor: pointer;
+}
+
+tbody tr.dragging {
+	opacity: 0.45;
+}
+
+tbody tr.drop-before td {
+	box-shadow: inset 0 2px 0 var(--green);
+}
+
+tbody tr.drop-after td {
+	box-shadow: inset 0 -2px 0 var(--green);
+}
+
+.clip-move-actions {
+	display: inline-flex;
+	gap: 3px;
+	margin-left: 4px;
+	vertical-align: middle;
+}
+
+.clip-move-button {
+	min-width: 24px;
+	padding: 1px 5px;
+	line-height: 1.2;
+}
+
+#manual-order-hint {
+	margin: 0 0 8px;
+}
+
 .col-thumb {
 	width: 104px;
 }

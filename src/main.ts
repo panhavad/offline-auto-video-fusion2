@@ -1,4 +1,5 @@
 import { formatBytes, formatClock, formatDate, formatDuration, timestampSlug } from './lib/format';
+import { APP_VERSION } from 'virtual:app-version';
 import { formatFrameRate, resolveFrameRate } from './lib/framerate';
 import { parseGpsFile } from './lib/gps';
 import { FACE_BLUR_LABELS } from './lib/face-blur';
@@ -104,6 +105,8 @@ const ui = {
 	clipCount: el<HTMLSpanElement>('clip-count'),
 	sortKey: el<HTMLSelectElement>('sort-key'),
 	sortDir: el<HTMLButtonElement>('sort-dir'),
+	manualOrderHint: el<HTMLParagraphElement>('manual-order-hint'),
+	clipTable: el<HTMLTableElement>('clip-table'),
 	selectAll: el<HTMLButtonElement>('select-all'),
 	selectNone: el<HTMLButtonElement>('select-none'),
 	probeStatus: el<HTMLSpanElement>('probe-status'),
@@ -135,9 +138,9 @@ const formattedBuildDate = new Intl.DateTimeFormat('en', {
 	day: 'numeric',
 	timeZone: 'UTC',
 }).format(buildDate);
-ui.appVersion.textContent = `v${__APP_VERSION__} · Updated ${formattedBuildDate}`;
-ui.appVersion.title = `Version ${__APP_VERSION__}, deployed ${buildDate.toLocaleString()}`;
-document.title = `${APP_NAME} v${__APP_VERSION__}`;
+ui.appVersion.textContent = `v${APP_VERSION} · Updated ${formattedBuildDate}`;
+ui.appVersion.title = `Version ${APP_VERSION}, deployed ${buildDate.toLocaleString()}`;
+document.title = `${APP_NAME} v${APP_VERSION}`;
 
 const settings: AppSettings = loadSettings();
 let entries: ClipEntry[] = [];
@@ -150,6 +153,9 @@ let idCounter = 0;
 let downloadUrl: string | null = null;
 let gpsTrack: GpsTrack | null = null;
 let gpsFileToken = 0;
+/** Clip paths in the user's chosen order; keyed by path so the order survives a rescan. */
+let manualOrder: string[] = [];
+let draggedClipId: string | null = null;
 const generatedOutputs = new Set<string>();
 
 const isGeneratedOutput = (name: string): boolean => OUTPUT_NAME_PATTERN.test(name) || generatedOutputs.has(name);
@@ -294,7 +300,12 @@ const readSettingsFromForm = () => {
 };
 
 const updateSortButton = () => {
+	const manual = settings.sortKey === 'manual';
 	ui.sortDir.textContent = settings.sortDirection === 'asc' ? 'Ascending ↑' : 'Descending ↓';
+	ui.sortDir.disabled = merging || manual;
+	ui.sortDir.title = manual ? 'Not used with manual order' : 'Toggle sort direction';
+	ui.manualOrderHint.classList.toggle('hidden', !manual);
+	ui.clipTable.classList.toggle('manual-order', manual);
 };
 
 const mergeSettings = (): MergeSettings => ({
@@ -360,12 +371,23 @@ const orientationMatches = (entry: ClipEntry): boolean => {
 const isEligible = (entry: ClipEntry): boolean =>
 	entry.included && Boolean(entry.probe?.ok) && orientationMatches(entry);
 
+const comparePaths = (a: ClipEntry, b: ClipEntry): number =>
+	a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' });
+
 const sortedEntries = (): ClipEntry[] => {
+	if (settings.sortKey === 'manual') {
+		// Clips not placed yet (new files after a rescan) go to the end, by name.
+		const rank = new Map(manualOrder.map((path, index) => [path, index]));
+		return [...entries].sort((a, b) => {
+			const result = (rank.get(a.path) ?? Infinity) - (rank.get(b.path) ?? Infinity);
+			return Number.isNaN(result) || result === 0 ? comparePaths(a, b) : result;
+		});
+	}
 	const direction = settings.sortDirection === 'asc' ? 1 : -1;
 	return [...entries].sort((a, b) => {
 		let result = 0;
 		if (settings.sortKey === 'name') {
-			result = a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' });
+			result = comparePaths(a, b);
 		} else if (settings.sortKey === 'modified') {
 			result = a.lastModified - b.lastModified;
 		} else {
@@ -374,6 +396,31 @@ const sortedEntries = (): ClipEntry[] => {
 		if (result === 0) result = a.path.localeCompare(b.path, undefined, { numeric: true });
 		return result * direction;
 	});
+};
+
+/** Moves a clip to `targetIndex` of the listed order, switching to manual order if needed. */
+const moveClip = (id: string, targetIndex: number) => {
+	const list = sortedEntries();
+	const from = list.findIndex((entry) => entry.id === id);
+	if (from < 0) return;
+	const to = Math.max(0, Math.min(list.length - 1, targetIndex));
+	if (from === to) return;
+	const [moved] = list.splice(from, 1);
+	list.splice(to, 0, moved);
+	manualOrder = list.map((entry) => entry.path);
+	if (settings.sortKey !== 'manual') {
+		settings.sortKey = 'manual';
+		ui.sortKey.value = 'manual';
+		saveSettings(settings);
+		updateSortButton();
+	}
+	render();
+};
+
+const clearDropMarkers = () => {
+	for (const row of ui.clipRows.querySelectorAll('.drop-before, .drop-after, .dragging')) {
+		row.classList.remove('drop-before', 'drop-after', 'dragging');
+	}
 };
 
 const previewGpsInput = (position = settings.gpsMapPosition, size = settings.gpsMapSize) => {
@@ -506,9 +553,10 @@ const statusLabel = (entry: ClipEntry): { text: string; className: string } => {
 const render = () => {
 	const list = sortedEntries();
 	const fragment = document.createDocumentFragment();
+	const manual = settings.sortKey === 'manual';
 	let order = 0;
 
-	for (const entry of list) {
+	for (const [index, entry] of list.entries()) {
 		const eligible = isEligible(entry);
 		if (eligible) order++;
 
@@ -531,7 +579,36 @@ const render = () => {
 		checkCell.append(checkbox);
 
 		const orderCell = document.createElement('td');
-		orderCell.textContent = eligible ? String(order) : '—';
+		orderCell.className = 'col-order';
+		const orderNumber = document.createElement('span');
+		orderNumber.className = 'order-number';
+		orderNumber.textContent = eligible ? String(order) : '—';
+		if (manual) {
+			row.draggable = !merging;
+			const handle = document.createElement('span');
+			handle.className = 'drag-handle';
+			handle.textContent = '⠿';
+			handle.title = 'Drag to reorder';
+			handle.setAttribute('aria-hidden', 'true');
+			const moveButton = (direction: 'up' | 'down') => {
+				const button = document.createElement('button');
+				button.type = 'button';
+				button.className = 'btn btn-white clip-move-button';
+				button.textContent = direction === 'up' ? '↑' : '↓';
+				button.disabled = merging || (direction === 'up' ? index === 0 : index === list.length - 1);
+				const label = `Move ${entry.path} ${direction}`;
+				button.title = label;
+				button.setAttribute('aria-label', label);
+				button.addEventListener('click', () => moveClip(entry.id, index + (direction === 'up' ? -1 : 1)));
+				return button;
+			};
+			const actions = document.createElement('span');
+			actions.className = 'clip-move-actions';
+			actions.append(moveButton('up'), moveButton('down'));
+			orderCell.append(handle, orderNumber, actions);
+		} else {
+			orderCell.append(orderNumber);
+		}
 
 		const thumbCell = document.createElement('td');
 		thumbCell.className = 'col-thumb';
@@ -652,7 +729,9 @@ const updateSummary = () => {
 			`${settings.faceBlur === 'off' ? '' : ` · ${FACE_BLUR_LABELS[settings.faceBlur]}`}` +
 			`${gpsTrack ? ` · ${describeGpsMatches(eligible, gpsTrack)}` : ''}` +
 			`${probing ? ' · still reading metadata…' : ''}` +
-			` · order: ${settings.sortKey} ${settings.sortDirection === 'asc' ? '↑' : '↓'}`;
+			(settings.sortKey === 'manual'
+				? ' · order: manual'
+				: ` · order: ${settings.sortKey} ${settings.sortDirection === 'asc' ? '↑' : '↓'}`);
 	}
 
 	ui.start.disabled = merging || starting || probing || eligible.length === 0;
@@ -814,6 +893,7 @@ const pickFolder = async () => {
 		const handle = await window.showDirectoryPicker({ id: 'auto-video-fusion', mode: 'readwrite' });
 		directoryHandle = handle;
 		directoryLabel = handle.name;
+		manualOrder = [];
 		await scanDirectory();
 	} catch (error) {
 		if ((error as DOMException)?.name !== 'AbortError') {
@@ -865,6 +945,7 @@ const setBusy = (busy: boolean) => {
 		ui.folderInput,
 	];
 	for (const control of controls) (control as HTMLInputElement).disabled = busy;
+	updateSortButton();
 	renderGpsInfoOrder();
 	ui.start.classList.toggle('hidden', busy);
 	ui.cancel.classList.toggle('hidden', !busy);
@@ -1248,6 +1329,7 @@ ui.folderInput.addEventListener('change', () => {
 	const files = Array.from(ui.folderInput.files ?? []).filter(isVideoFile);
 	directoryHandle = null;
 	directoryLabel = 'selected files';
+	manualOrder = [];
 	ui.folderInfo.textContent = `${files.length} video file${files.length === 1 ? '' : 's'} selected. The merged file will be offered as a download.`;
 	addFiles(files.map((file) => ({ file, path: file.webkitRelativePath || file.name })));
 });
@@ -1399,8 +1481,65 @@ ui.titleColorHex.addEventListener('change', () => {
 });
 
 ui.sortKey.addEventListener('change', () => {
+	// Manual order starts from whatever order was on screen, so a sort can be fine-tuned by hand.
+	const previousOrder = sortedEntries().map((entry) => entry.path);
 	readSettingsFromForm();
+	if (settings.sortKey === 'manual') manualOrder = previousOrder;
+	updateSortButton();
 	render();
+});
+
+ui.clipRows.addEventListener('dragstart', (event) => {
+	const row = (event.target as Element | null)?.closest?.<HTMLTableRowElement>('tr[data-id]');
+	if (!row || merging || settings.sortKey !== 'manual') {
+		event.preventDefault();
+		return;
+	}
+	draggedClipId = row.dataset.id ?? null;
+	row.classList.add('dragging');
+	if (event.dataTransfer) {
+		event.dataTransfer.effectAllowed = 'move';
+		event.dataTransfer.setData('text/plain', draggedClipId ?? '');
+	}
+});
+
+ui.clipRows.addEventListener('dragover', (event) => {
+	if (!draggedClipId) return;
+	const row = (event.target as Element | null)?.closest?.<HTMLTableRowElement>('tr[data-id]');
+	if (!row) return;
+	event.preventDefault();
+	if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+	const bounds = row.getBoundingClientRect();
+	const after = event.clientY > bounds.top + bounds.height / 2;
+	for (const marked of ui.clipRows.querySelectorAll('.drop-before, .drop-after')) {
+		if (marked !== row) marked.classList.remove('drop-before', 'drop-after');
+	}
+	row.classList.toggle('drop-after', after);
+	row.classList.toggle('drop-before', !after);
+});
+
+ui.clipRows.addEventListener('drop', (event) => {
+	if (!draggedClipId) return;
+	const row = (event.target as Element | null)?.closest?.<HTMLTableRowElement>('tr[data-id]');
+	event.preventDefault();
+	const dragged = draggedClipId;
+	draggedClipId = null;
+	clearDropMarkers();
+	if (!row || row.dataset.id === dragged) return;
+	const list = sortedEntries();
+	const from = list.findIndex((entry) => entry.id === dragged);
+	let to = list.findIndex((entry) => entry.id === row.dataset.id);
+	if (from < 0 || to < 0) return;
+	const bounds = row.getBoundingClientRect();
+	if (event.clientY > bounds.top + bounds.height / 2) to++;
+	// Removing the dragged row first shifts every later index up by one.
+	if (from < to) to--;
+	moveClip(dragged, to);
+});
+
+ui.clipRows.addEventListener('dragend', () => {
+	draggedClipId = null;
+	clearDropMarkers();
 });
 
 ui.sortDir.addEventListener('click', () => {

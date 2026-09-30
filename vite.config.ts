@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from 'vite';
+import { createVersionTrackerPlugin } from './scripts/version-tracker.mjs';
 
 const port = (value: string | undefined, fallback: number) => {
 	const parsed = Number(value);
@@ -17,8 +18,8 @@ export default defineConfig(({ mode }) => {
 	return {
 		// Relative base so the built app also works from a subfolder or from file-served static hosts.
 		base: './',
+		plugins: [createVersionTrackerPlugin()],
 		define: {
-			__APP_VERSION__: JSON.stringify(processEnv.npm_package_version ?? '1.0.0'),
 			__APP_BUILD_DATE__: JSON.stringify(new Date().toISOString()),
 		},
 		build: {

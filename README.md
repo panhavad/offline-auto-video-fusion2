@@ -11,6 +11,7 @@ even when the server is gone.
 - [Quick start with Docker](#quick-start-with-docker)
   - [Automatic updates from git](#automatic-updates-from-git)
 - [Quick start without Docker](#quick-start-without-docker)
+- [Automatic version tracking](#automatic-version-tracking)
 - [Using the app](#using-the-app)
 - [Deployment](#deployment)
 - [What it does](#what-it-does)
@@ -167,6 +168,18 @@ npm run preview        # serve dist/ at http://localhost:4173 ($PREVIEW_PORT)
 
 For development: `npm run dev` (http://localhost:5173, or `$DEV_PORT`) and `npm run typecheck`.
 
+## Automatic version tracking
+
+The version badge is generated automatically as `<package version>+<source fingerprint>`, for
+example `1.0.0+a1b2c3d4e5f6`. The package version remains the human-selected release line, while the
+fingerprint changes whenever application source, public assets, build scripts, or build
+configuration changes. During `npm run dev`, Vite invalidates the virtual version module and
+refreshes the page automatically after a tracked edit. Production builds embed the fingerprint
+that exactly identifies their source state.
+
+Set the next release line only when needed with `npm version patch`, `npm version minor`, or
+`npm version major`; routine code changes need no manual version edit.
+
 ## Using the app
 
 Open the page in Chrome or Edge. The badge in the header tells you whether the offline cache is
@@ -230,8 +243,11 @@ selected aspect ratio (or the first eligible clip in *Auto*) and shows the title
 with the selected mini map size, corner, opacity and information fields in the same output frame.
 
 **3 · Review the clips.** Each clip is probed in a worker: resolution, orientation, duration, dates
-and a decoded thumbnail. Sort by name, modified or created date (ascending/descending) — **the list
-order is exactly the order in which clips are concatenated** — and untick anything you do not want.
+and a decoded thumbnail. Sort by name, modified or created date (ascending/descending), or pick
+*Manual order* and arrange the clips yourself by dragging rows (⠿ handle) or with the ↑ ↓ buttons —
+**the list order is exactly the order in which clips are concatenated** — and untick anything you do
+not want. Manual order starts from the order shown before switching and survives a *Rescan* (newly
+found clips are appended at the end); picking another folder starts over in name order.
 
 ![Clip list with thumbnails and metadata](docs/screenshots/02-clip-list.png)
 
@@ -312,8 +328,9 @@ Other notes:
   or pixelated in the merged video, with no per-clip setup. See [Face privacy](#face-privacy).
 - **Title text burned into every frame**, with 9 positions (default *bottom right*) and a free
   colour (default *white*), an adjustable size and an optional shadow for legibility.
-- **Sorting by name, modified date or created date**, ascending or descending. The list order is
-  exactly the order in which the clips are concatenated.
+- **Sorting by name, modified date or created date**, ascending or descending, or a **manual order**
+  set by drag and drop or ↑ ↓ buttons. The list order is exactly the order in which the clips are
+  concatenated.
 - **Thumbnail preview per clip**: while a clip's metadata is read, one early frame is decoded in the
   worker and shown next to it in the list (rotation metadata applied, so portrait clips stand
   upright). Clips whose first frames cannot be decoded simply show a placeholder.

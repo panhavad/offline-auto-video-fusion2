@@ -15,7 +15,7 @@ export type TitlePosition =
 	| 'bottom-right';
 
 export type FitMode = 'contain' | 'cover';
-export type SortKey = 'name' | 'modified' | 'created';
+export type SortKey = 'name' | 'modified' | 'created' | 'manual';
 export type SortDirection = 'asc' | 'desc';
 export type ResolutionPreset = 'auto' | '2160' | '1440' | '1080' | '720' | '480';
 /** `auto` keeps the first clip's shape; every other value forces a width:height ratio. */
