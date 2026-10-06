@@ -535,7 +535,7 @@ async function runMerge(request: MergeRequest): Promise<void> {
 		// copy of itself, so nothing is cropped away and there are still no black bars.
 		const fit = highlight
 			? settings.highlightFraming === 'blur' ? 'contain' : 'cover'
-			: resolveFitMode(settings.resolution, settings.aspectRatio, settings.fit);
+			: resolveFitMode(settings.resolution, settings.aspectRatio, settings.fit, settings.keepOriginalRatio);
 		const frameRate = resolveFrameRate(settings.frameRate, items.map((item) => item.sourceFrameRate));
 
 		// How much of the machine this merge is allowed to use. Decoding and compositing scale across
@@ -600,11 +600,17 @@ async function runMerge(request: MergeRequest): Promise<void> {
 			settings.aspectRatio === 'auto' ? null : `${settings.aspectRatio} aspect ratio`,
 			settings.resolution === 'auto' ? null : `${settings.resolution}p`,
 		].filter(Boolean);
+		const keptWhole = 'shown whole in their own aspect ratio, with black bars (original ratio kept).';
 		log(
 			forcedFrame.length === 0
-				? `Frame follows the first clip: ${formatSize({ width, height })}.`
+				? `Frame follows the first clip: ${formatSize({ width, height })}.` +
+						(settings.keepOriginalRatio ? ` Clips of another shape are ${keptWhole}` : '')
 				: `Frame forced to ${forcedFrame.join(' at ')} (${formatSize({ width, height })}); clips that do not fit are ` +
-						(fit === 'contain' ? 'framed over a blurred copy of themselves.' : 'cropped to fill.'),
+						(fit === 'cover'
+							? 'cropped to fill.'
+							: highlight
+								? 'framed over a blurred copy of themselves.'
+								: keptWhole),
 		);
 		if (highlight) {
 			const longest = Math.max(...items.map((item) => item.plannedSeconds));

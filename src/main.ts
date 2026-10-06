@@ -84,6 +84,8 @@ const ui = {
 	fallbackWrap: el<HTMLDivElement>('fallback-wrap'),
 	folderInput: el<HTMLInputElement>('folder-input'),
 	orientation: el<HTMLSelectElement>('orientation'),
+	keepRatio: el<HTMLInputElement>('keep-ratio'),
+	keepRatioWrap: el<HTMLLabelElement>('keep-ratio-wrap'),
 	maxClip: el<HTMLInputElement>('max-clip'),
 	titleText: el<HTMLInputElement>('title-text'),
 	titlePosition: el<HTMLSelectElement>('title-position'),
@@ -309,6 +311,7 @@ const showTitleLook = () => {
 
 const applySettingsToForm = () => {
 	ui.orientation.value = settings.orientation;
+	ui.keepRatio.checked = settings.keepOriginalRatio;
 	ui.maxClip.value = String(settings.maxClipSeconds);
 	ui.titleText.value = settings.title;
 	ui.titleColor.value = settings.titleColor;
@@ -351,6 +354,7 @@ const applySettingsToForm = () => {
 
 const readSettingsFromForm = () => {
 	settings.orientation = ui.orientation.value as AppSettings['orientation'];
+	settings.keepOriginalRatio = ui.keepRatio.checked;
 	settings.maxClipSeconds = Math.max(0, Number(ui.maxClip.value) || 0);
 	settings.title = ui.titleText.value;
 	settings.titleColor = ui.titleColor.value.toUpperCase();
@@ -414,6 +418,7 @@ const applyModeState = () => {
 	ui.mergeModeInfo.classList.toggle('hidden', highlight);
 	// App safe zones only matter for a reel that is posted to a social feed.
 	ui.playerSafeWrap.classList.toggle('hidden', !highlight);
+	ui.keepRatioWrap.classList.toggle('hidden', highlight || settings.orientation !== 'any');
 	const replaced: [HTMLInputElement | HTMLSelectElement, string][] = [
 		[ui.orientation, 'A highlight reel uses clips of every orientation'],
 		[ui.maxClip, 'A highlight reel takes "Seconds per clip" from each clip instead'],
@@ -433,6 +438,8 @@ const mergeSettings = (): MergeSettings => {
 	const look = titleLookOf(settings.outputMode);
 	return {
 		orientation: highlight ? 'any' : settings.orientation,
+		// Only offered together with "Any orientation"; a highlight frames clips its own way.
+		keepOriginalRatio: !highlight && settings.orientation === 'any' && settings.keepOriginalRatio,
 		maxClipSeconds: settings.maxClipSeconds,
 		title: settings.title.replace(/\\n/g, '\n'),
 		titlePosition: look.position,
@@ -478,7 +485,7 @@ const mergeSettings = (): MergeSettings => {
 const outputFit = (merge: MergeSettings): FitMode =>
 	merge.outputMode === 'highlight'
 		? merge.highlightFraming === 'blur' ? 'contain' : 'cover'
-		: resolveFitMode(merge.resolution, merge.aspectRatio, merge.fit);
+		: resolveFitMode(merge.resolution, merge.aspectRatio, merge.fit, merge.keepOriginalRatio);
 
 // ---------------------------------------------------------------------------
 // Clip helpers
@@ -1065,15 +1072,16 @@ const updateSummary = () => {
 			eligible[0].probe?.height ?? 0,
 		);
 		const framesFollowFirstClip = settings.resolution === 'auto' && settings.aspectRatio === 'auto';
+		const keepWhole = mergeSettings().keepOriginalRatio;
+		const reshaped = eligible.filter((entry) => isCropped(entry.probe?.width ?? 0, entry.probe?.height ?? 0, output)).length;
 		const cropped =
-			resolveFitMode(settings.resolution, settings.aspectRatio, settings.fit) === 'cover'
-				? eligible.filter((entry) => isCropped(entry.probe?.width ?? 0, entry.probe?.height ?? 0, output)).length
-				: 0;
+			resolveFitMode(settings.resolution, settings.aspectRatio, settings.fit, keepWhole) === 'cover' ? reshaped : 0;
 		ui.mergeSummary.textContent =
 			`${eligible.length} clip${eligible.length === 1 ? '' : 's'} · merged length ≈ ${formatDuration(totalSource)}` +
 			`${trimmed > 0 ? ` · ${trimmed} will be trimmed to ${settings.maxClipSeconds}s` : ''}` +
 			` · ${framesFollowFirstClip ? `auto ${formatSize(output)}` : formatSize(output)}` +
 			`${cropped > 0 ? ` · ${cropped} will be cropped to fit` : ''}` +
+			`${keepWhole && reshaped > 0 ? ` · ${reshaped} kept whole in their original ratio (black bars)` : ''}` +
 			` · ${settings.frameRate === 'auto' ? `auto ${formatFrameRate(resolvedFps)}` : formatFrameRate(resolvedFps)}` +
 			`${settings.stabilize === 'off' ? '' : ` · ${STABILIZER_LABELS[settings.stabilize]} stabilization`}` +
 			`${settings.faceBlur === 'off' ? '' : ` · ${FACE_BLUR_LABELS[settings.faceBlur]}`}` +
@@ -1263,6 +1271,7 @@ const setBusy = (busy: boolean) => {
 		ui.rescan,
 		ui.recursive,
 		ui.orientation,
+		ui.keepRatio,
 		ui.maxClip,
 		ui.titleText,
 		ui.titlePosition,
@@ -1716,6 +1725,7 @@ ui.folderInput.addEventListener('change', () => {
 
 for (const control of [
 	ui.orientation,
+	ui.keepRatio,
 	ui.maxClip,
 	ui.titleText,
 	ui.titlePosition,

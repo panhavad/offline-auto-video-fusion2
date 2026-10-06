@@ -393,6 +393,11 @@ main {
 	width: max-content;
 }
 
+.keep-ratio {
+	grid-column: 1 / -1;
+	font-size: 0.85rem;
+}
+
 .overlay-layout {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(320px, 0.95fr);

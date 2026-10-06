@@ -96,6 +96,11 @@ export interface ProbeResult {
 
 export interface MergeSettings {
 	orientation: Orientation;
+	/**
+	 * With every orientation merged: show each clip whole in its own aspect ratio (letterboxed),
+	 * never cropped or stretched, even when the output frame is forced.
+	 */
+	keepOriginalRatio: boolean;
 	maxClipSeconds: number;
 	title: string;
 	titlePosition: TitlePosition;

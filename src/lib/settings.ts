@@ -172,6 +172,7 @@ export interface AppSettings extends MergeSettings {
 
 export const DEFAULT_SETTINGS: AppSettings = {
 	orientation: 'landscape',
+	keepOriginalRatio: false,
 	maxClipSeconds: 20,
 	title: '',
 	titlePosition: 'bottom-right',
@@ -249,6 +250,7 @@ export const loadSettings = (): AppSettings => {
 			gpsShowCoordinates: parsed.gpsShowCoordinates ?? DEFAULT_SETTINGS.gpsShowCoordinates,
 			gpsShowDateTime: parsed.gpsShowDateTime ?? DEFAULT_SETTINGS.gpsShowDateTime,
 			textStyle: oneOf(TEXT_STYLES, parsed.textStyle, DEFAULT_SETTINGS.textStyle),
+			keepOriginalRatio: parsed.keepOriginalRatio === true,
 			highlightTitlePosition: oneOf(TITLE_POSITIONS, parsed.highlightTitlePosition, DEFAULT_SETTINGS.highlightTitlePosition),
 			highlightTitleScale: sanitizeTitleScale(parsed.highlightTitleScale, DEFAULT_SETTINGS.highlightTitleScale),
 			highlightTextStyle: oneOf(TEXT_STYLES, parsed.highlightTextStyle, DEFAULT_SETTINGS.highlightTextStyle),

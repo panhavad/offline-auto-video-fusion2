@@ -66,13 +66,18 @@ export const resolveOutputSize = (
 
 /**
  * A forced frame crops whatever does not fit it; when both controls follow the first clip the
- * configured letterboxing is kept for the clips that have a different shape.
+ * configured letterboxing is kept for the clips that have a different shape. `keepOriginalRatio`
+ * never crops: every clip is shown whole, scaled evenly and centred with black bars.
  */
 export const resolveFitMode = (
 	resolution: ResolutionPreset,
 	aspectRatio: AspectRatioSetting,
 	fit: FitMode,
-): FitMode => (resolution === 'auto' && aspectRatio === 'auto' ? fit : 'cover');
+	keepOriginalRatio = false,
+): FitMode => {
+	if (keepOriginalRatio) return 'contain';
+	return resolution === 'auto' && aspectRatio === 'auto' ? fit : 'cover';
+};
 
 /** True when the clip has a different shape than the output frame and therefore loses edges. */
 export const isCropped = (clipWidth: number, clipHeight: number, output: OutputSize): boolean => {

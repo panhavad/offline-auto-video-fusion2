@@ -196,6 +196,7 @@ instead.
 | Setting | Meaning |
 | --- | --- |
 | Orientation | Only clips matching *landscape* / *portrait* are merged (*any* disables the filter). Skipped clips still show up in the list. |
+| Keep original ratio (no crop) | Offered with *Any orientation* in a full merge (off by default). Every clip is shown whole in its own aspect ratio: scaled evenly to fit the output frame and centred, with black bars where its shape differs. Nothing is cropped or stretched, even when the aspect ratio or resolution is forced. |
 | Max length per clip | Longer clips are trimmed to this many seconds; `0` keeps the full length. |
 | Resolution | *Auto* (default) keeps the first clip's size. A preset rescales the frame so its short edge is 2160/1440/1080/720/480. |
 | Aspect ratio | *Auto* (default) keeps the first clip's shape. Pick 16:9, 9:16, 4:3, 3:4, 1:1, 4:5 or 21:9 to force a different frame. |
@@ -211,7 +212,8 @@ instead.
 
 With both frame controls on *auto* the output is exactly the first clip's frame, and clips of a
 different shape are letterboxed into it. As soon as either one is set, the frame is forced and
-**every clip that does not fit it is cropped to fill** instead. The two controls are independent:
+**every clip that does not fit it is cropped to fill** instead — unless *Keep original ratio (no crop)*
+is ticked, which letterboxes those clips whole. The two controls are independent:
 the ratio picks the shape and the resolution picks the size, so forcing only the ratio keeps the
 first clip's short edge and therefore its level of detail. If the encoder cannot handle the
 requested size, the frame is scaled down automatically and a warning is logged.
