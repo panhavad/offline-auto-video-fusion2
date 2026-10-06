@@ -13,6 +13,7 @@ even when the server is gone.
 - [Quick start without Docker](#quick-start-without-docker)
 - [Automatic version tracking](#automatic-version-tracking)
 - [Using the app](#using-the-app)
+- [Highlight reels](#highlight-reels)
 - [Deployment](#deployment)
 - [What it does](#what-it-does)
 - [How it stays fast and light on memory](#how-it-stays-fast-and-light-on-memory)
@@ -198,7 +199,8 @@ instead.
 | Max length per clip | Longer clips are trimmed to this many seconds; `0` keeps the full length. |
 | Resolution | *Auto* (default) keeps the first clip's size. A preset rescales the frame so its short edge is 2160/1440/1080/720/480. |
 | Aspect ratio | *Auto* (default) keeps the first clip's shape. Pick 16:9, 9:16, 4:3, 3:4, 1:1, 4:5 or 21:9 to force a different frame. |
-| Title text / position / color / size | Text burned into every frame, at one of 9 positions. `\n` starts a second line. |
+| Title text / position / color / size | Text burned into every frame, at one of 9 positions. `\n` starts a second line. A full merge defaults to *bottom right* at size *4*. |
+| Title style | *Classic* (default for a full merge), or one of the short-form styles: *Bold outline (TikTok)*, *Caption box* (text on a rounded box in the chosen colour), *Neon glow*, *Meme (Impact)* and *Pop 3D*. They only use fonts that ship with the operating system, so they work offline. Full merges and highlight reels each remember their own position, size and style (a highlight starts at *top center*, size *5*, *Bold outline*); the text and colour are shared. |
 | Frame rate | Upper limit — source frames are never duplicated to reach it. *Auto* (default) matches the fastest selected clip, or falls back to a 120 fps limit when no source rate can be detected. |
 | Stabilizer | Software stabilization applied automatically to **every** clip. *Off* (default) skips it entirely; *Light* / *Standard* / *Strong* trade an increasing crop for an increasingly steady picture. See [Stabilization](#stabilization). |
 | Face privacy | Automatically finds human faces and hides them. *Off* (default) skips detection entirely; *Blur faces* / *Blur faces (strong)* soften them, *Pixelate faces* replaces them with blocks. See [Face privacy](#face-privacy). |
@@ -251,8 +253,19 @@ found clips are appended at the end); picking another folder starts over in name
 
 ![Clip list with thumbnails and metadata](docs/screenshots/02-clip-list.png)
 
-**4 · Merge.** *Start merge* writes the result directly into the selected folder as
-`merged-<date>-<time>.mp4` (or offers a download when the folder cannot be written to). The progress
+**4 · Output & preview.** Choose *Full merge* (every clip back to back) or *Highlight reel* (a
+short 9:16 or 16:9 clip with a moment of every video — see [Highlight reels](#highlight-reels)).
+The live preview next to it plays the output exactly as it will be encoded, straight from the local
+files and without encoding anything: the frame has the output's real shape and orientation, and it
+shows the clip order, cropping or blurred-background framing, transitions, title style and GPS mini
+map. ▶ / ❚❚ (or a click on the picture) plays and pauses, ⏮ ⏭ jump between clips, the slider scrubs
+through the timeline, 🔊 mutes and *Full screen* enlarges it. Stabilization and face privacy are
+only applied while rendering. A clip the browser's `<video>` element cannot play (for example an
+unusual codec) is shown as a placeholder for its duration but still renders normally.
+
+**5 · Merge.** *Start merge* writes the result directly into the selected folder as
+`merged-<date>-<time>.mp4` (or offers a download when the folder cannot be written to); in highlight
+mode the button reads *Create highlight* and the file is called `highlight-<date>-<time>.mp4`. The progress
 panel shows percentage, current clip, ETA, elapsed time, encode speed, output size and a log;
 *Cancel* stops and discards the partial file.
 
@@ -267,6 +280,44 @@ The header toggle switches between the dark and the light theme; the choice is p
 the other settings.
 
 ![Light theme](docs/screenshots/05-light-theme.png)
+
+## Highlight reels
+
+A highlight turns the whole folder into one short, shareable clip for TikTok, Instagram Reels,
+YouTube Shorts and the like. Pick *Highlight reel* in **Output & preview**:
+
+| Setting | Meaning |
+| --- | --- |
+| Format | *9:16 Vertical* (default — TikTok, Reels, Shorts) or *16:9 Landscape* (YouTube, Facebook, X). Larger sources are scaled down to 1080p, the resolution those platforms publish at; an explicit *Resolution* setting still wins. |
+| Seconds per clip | How much of every clip is used (default *2 s*). |
+| Max length | Upper limit of the whole reel (default *30 s*). |
+| Take from | *Middle of each clip* (default), *start* or *end*. The middle avoids the usual fumbling at the start and end of a recording. |
+| Framing | *Blurred background* (default) fits every clip completely and fills the rest of the frame with a blurred, darkened copy of itself — the common way to show landscape footage in a vertical video. *Crop to fill* zooms in instead. |
+| Transition | The effect at every cut: *Mix* (default, changes from cut to cut), *Zoom punch*, *Whip pan*, *Flash*, *Glitch*, *Spin*, *Dip to black* or *Hard cut*. |
+
+**Every selected clip is always in the reel.** Each clip gets *Seconds per clip*; when that would
+exceed *Max length*, all segments are shortened evenly instead of dropping clips — 20 clips in a
+30-second reel get 1.5 s each — and the time a clip that is shorter than its share cannot use is
+handed to the others. The reel takes clips of every orientation (the orientation filter and *Max
+clip* do not apply) in the order of the clip list, and the summary and the panel show the exact
+plan before anything is rendered.
+
+Each transition is split across the cut: the outgoing clip performs the first half (zooming in,
+whipping away, flashing up …) and the incoming clip the mirrored second half, which reads as one
+continuous effect while every clip is still rendered independently in its own lane. Each half lasts
+up to 0.2 s. The title pops in at the start of the reel, and the audio gets a 25 ms fade at every
+cut so fast cuts never click. Audio and video are cut at exactly the planned length, so a 30-second
+reel does not run over. The title keeps a separate look in highlight mode — *top center*, size *5*,
+*Bold outline* by default — so switching modes never changes the full merge's title.
+
+**Built for the app feed.** TikTok, Reels and Shorts draw their own interface over a vertical
+video: the header tabs along the top, the like/comment/share column on the right and the username,
+caption and music bar along the bottom. In a highlight, the title and the GPS mini map are placed
+inside the area that stays visible: 14 % below the top, 24 % above the bottom, 16 % in from the
+right and 6 % from the left. 16:9 reels keep clear of the player's title bar and progress bar. The
+mini map also steps aside for the title, below it in a top corner and above it in a bottom corner,
+instead of covering it. Tick *Show app UI zones* under the preview to shade those areas. The guide
+is only drawn in the preview, never into the video.
 
 ## Deployment
 
@@ -327,7 +378,12 @@ Other notes:
 - **Automatic face blurring** (default *off*): faces are detected on your own machine and blurred
   or pixelated in the merged video, with no per-clip setup. See [Face privacy](#face-privacy).
 - **Title text burned into every frame**, with 9 positions (default *bottom right*) and a free
-  colour (default *white*), an adjustable size and an optional shadow for legibility.
+  colour (default *white*), an adjustable size (default *4 %*), an optional shadow for legibility and
+  six text styles (default *Classic*), from classic to TikTok-style bold outlines and caption boxes.
+- **Highlight reels** for social media: a 9:16 or 16:9 clip with ~2 s of every video, capped at
+  30 s, with transitions and blurred-background framing. See [Highlight reels](#highlight-reels).
+- **Live output preview** that plays the result in its real frame shape before anything is
+  encoded.
 - **Sorting by name, modified date or created date**, ascending or descending, or a **manual order**
   set by drag and drop or ↑ ↓ buttons. The list order is exactly the order in which the clips are
   concatenated.
@@ -335,8 +391,9 @@ Other notes:
   worker and shown next to it in the list (rotation metadata applied, so portrait clips stand
   upright). Clips whose first frames cannot be decoded simply show a placeholder.
 - **Progress bar with ETA**, live encode speed, output size, clip counter, and a cancel button.
-- **The result is written directly into the selected folder** as `merged-<date>-<time>.mp4`
-  (previous outputs are automatically ignored when the folder is scanned again).
+- **The result is written directly into the selected folder** as `merged-<date>-<time>.mp4` (or
+  `highlight-<date>-<time>.mp4`; previous outputs are automatically ignored when the folder is
+  scanned again).
 
 ## How it stays fast and light on memory
 
@@ -540,8 +597,13 @@ The app must be served from a secure context (`https://` or `http://localhost`).
 index.html                     UI markup
 src/styles.css                 black & white theme
 src/main.ts                    folder scanning, clip list, settings, progress UI
+src/preview-player.ts          live output preview (two <video> elements composited on a canvas)
 src/worker/pipeline.worker.ts  probing, the render lanes, and the encode → mux stage
 src/worker/clip-renderer.ts    per-clip demux → decode → composite work run by each lane
+src/lib/highlight.ts           highlight planning: one segment per clip, fitted into the length limit
+src/lib/effects.ts             cut transitions, blurred-background framing, title pop-in
+src/lib/safe-area.ts           social-app safe zones that highlight overlays stay inside
+src/lib/title-overlay.ts       title rasterisation in every text style
 src/lib/hardware.ts            GPU/CPU detection and the lane + look-ahead budget it derives
 src/lib/stabilizer.ts          optical-flow motion analysis, trajectory smoothing, frame correction
 src/lib/face-blur.ts           Haar face detection, box tracking, and the blur/pixelate pass

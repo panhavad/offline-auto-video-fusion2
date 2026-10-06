@@ -6,13 +6,26 @@ import type {
 	GpsInfoItem,
 	GpsMapBackground,
 	GpsMapPosition,
+	HighlightFormat,
+	HighlightFraming,
+	HighlightPick,
 	MergeSettings,
+	OutputMode,
 	ResolutionPreset,
 	SortDirection,
 	SortKey,
 	StabilizerSetting,
+	TextStyle,
+	TitlePosition,
+	TransitionStyle,
 } from '../types';
 import { DEFAULT_GPS_MATCH_TOLERANCE_MINUTES, GPS_MATCH_TOLERANCE_OPTIONS } from './gps-match';
+import {
+	DEFAULT_HIGHLIGHT_CLIP_SECONDS,
+	DEFAULT_HIGHLIGHT_MAX_SECONDS,
+	HIGHLIGHT_CLIP_SECONDS_RANGE,
+	HIGHLIGHT_MAX_SECONDS_RANGE,
+} from './highlight';
 
 const STORAGE_KEY = 'auto-video-fusion:settings:v1';
 
@@ -28,6 +41,43 @@ const ACCELERATION_MODES: AccelerationMode[] = ['auto', 'max', 'balanced', 'safe
 const GPS_MAP_POSITIONS: GpsMapPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
 const GPS_MAP_BACKGROUNDS: GpsMapBackground[] = ['plain', 'map'];
 export const DEFAULT_GPS_INFO_ORDER: GpsInfoItem[] = ['altitude', 'distance', 'date-time', 'speed', 'coordinates'];
+const OUTPUT_MODES: OutputMode[] = ['merge', 'highlight'];
+const HIGHLIGHT_FORMATS: HighlightFormat[] = ['9:16', '16:9'];
+const HIGHLIGHT_PICKS: HighlightPick[] = ['middle', 'start', 'end'];
+const HIGHLIGHT_FRAMINGS: HighlightFraming[] = ['blur', 'crop'];
+const TRANSITIONS: TransitionStyle[] = ['none', 'mix', 'zoom', 'whip', 'flash', 'glitch', 'spin', 'dip'];
+const TEXT_STYLES: TextStyle[] = ['classic', 'bold', 'caption', 'neon', 'meme', 'pop'];
+const TITLE_POSITIONS: TitlePosition[] = [
+	'top-left',
+	'top-center',
+	'top-right',
+	'middle-left',
+	'middle-center',
+	'middle-right',
+	'bottom-left',
+	'bottom-center',
+	'bottom-right',
+];
+
+/** Title size as a percentage of the frame height, as accepted by the size field. */
+export const sanitizeTitleScale = (value: unknown, fallback: number): number => {
+	const numeric = Number(value);
+	return Number.isFinite(numeric) && numeric > 0 ? Math.min(30, Math.max(2, numeric)) : fallback;
+};
+
+const oneOf = <T>(allowed: readonly T[], value: unknown, fallback: T): T =>
+	allowed.includes(value as T) ? (value as T) : fallback;
+
+const clampNumber = (value: unknown, range: { min: number; max: number }, fallback: number): number => {
+	const numeric = Number(value);
+	return Number.isFinite(numeric) ? Math.min(range.max, Math.max(range.min, numeric)) : fallback;
+};
+
+export const sanitizeHighlightClipSeconds = (value: unknown): number =>
+	Math.round(clampNumber(value, HIGHLIGHT_CLIP_SECONDS_RANGE, DEFAULT_HIGHLIGHT_CLIP_SECONDS) * 10) / 10;
+
+export const sanitizeHighlightMaxSeconds = (value: unknown): number =>
+	Math.round(clampNumber(value, HIGHLIGHT_MAX_SECONDS_RANGE, DEFAULT_HIGHLIGHT_MAX_SECONDS));
 
 const sanitizeFrameRate = (value: unknown): FrameRateSetting => {
 	if (value === 'auto') return 'auto';
@@ -106,6 +156,14 @@ const sanitizeGpsInfoOrder = (value: unknown): GpsInfoItem[] => {
 };
 
 export interface AppSettings extends MergeSettings {
+	/**
+	 * A highlight reel keeps its own title look, so switching modes never turns a full merge's
+	 * subtle caption into a TikTok headline or the other way round. `titlePosition`, `titleScale`
+	 * and `textStyle` hold the full-merge look.
+	 */
+	highlightTitlePosition: TitlePosition;
+	highlightTitleScale: number;
+	highlightTextStyle: TextStyle;
 	sortKey: SortKey;
 	sortDirection: SortDirection;
 	recursive: boolean;
@@ -118,8 +176,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	title: '',
 	titlePosition: 'bottom-right',
 	titleColor: '#FFFFFF',
-	titleScale: 3,
+	titleScale: 4,
 	titleShadow: true,
+	textStyle: 'classic',
+	highlightTitlePosition: 'top-center',
+	highlightTitleScale: 5,
+	highlightTextStyle: 'bold',
 	fit: 'contain',
 	resolution: 'auto',
 	aspectRatio: 'auto',
@@ -142,6 +204,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
 	gpsShowDistance: true,
 	gpsShowCoordinates: false,
 	gpsShowDateTime: true,
+	outputMode: 'merge',
+	highlightFormat: '9:16',
+	highlightClipSeconds: DEFAULT_HIGHLIGHT_CLIP_SECONDS,
+	highlightMaxSeconds: DEFAULT_HIGHLIGHT_MAX_SECONDS,
+	highlightPick: 'middle',
+	highlightFraming: 'blur',
+	transition: 'mix',
 	sortKey: 'name',
 	sortDirection: 'asc',
 	recursive: false,
@@ -179,6 +248,17 @@ export const loadSettings = (): AppSettings => {
 			gpsShowDistance: parsed.gpsShowDistance ?? DEFAULT_SETTINGS.gpsShowDistance,
 			gpsShowCoordinates: parsed.gpsShowCoordinates ?? DEFAULT_SETTINGS.gpsShowCoordinates,
 			gpsShowDateTime: parsed.gpsShowDateTime ?? DEFAULT_SETTINGS.gpsShowDateTime,
+			textStyle: oneOf(TEXT_STYLES, parsed.textStyle, DEFAULT_SETTINGS.textStyle),
+			highlightTitlePosition: oneOf(TITLE_POSITIONS, parsed.highlightTitlePosition, DEFAULT_SETTINGS.highlightTitlePosition),
+			highlightTitleScale: sanitizeTitleScale(parsed.highlightTitleScale, DEFAULT_SETTINGS.highlightTitleScale),
+			highlightTextStyle: oneOf(TEXT_STYLES, parsed.highlightTextStyle, DEFAULT_SETTINGS.highlightTextStyle),
+			outputMode: oneOf(OUTPUT_MODES, parsed.outputMode, DEFAULT_SETTINGS.outputMode),
+			highlightFormat: oneOf(HIGHLIGHT_FORMATS, parsed.highlightFormat, DEFAULT_SETTINGS.highlightFormat),
+			highlightClipSeconds: sanitizeHighlightClipSeconds(parsed.highlightClipSeconds),
+			highlightMaxSeconds: sanitizeHighlightMaxSeconds(parsed.highlightMaxSeconds),
+			highlightPick: oneOf(HIGHLIGHT_PICKS, parsed.highlightPick, DEFAULT_SETTINGS.highlightPick),
+			highlightFraming: oneOf(HIGHLIGHT_FRAMINGS, parsed.highlightFraming, DEFAULT_SETTINGS.highlightFraming),
+			transition: oneOf(TRANSITIONS, parsed.transition, DEFAULT_SETTINGS.transition),
 		};
 	} catch {
 		return { ...DEFAULT_SETTINGS, gpsInfoOrder: [...DEFAULT_SETTINGS.gpsInfoOrder] };

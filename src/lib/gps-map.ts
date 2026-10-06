@@ -1,5 +1,6 @@
 import type { GpsInfoItem, GpsMapBackground, GpsMapPosition, GpsPoint } from '../types';
 import { distanceMetres, sampleTrackAt } from './gps-match';
+import type { FrameRect, SafeArea } from './safe-area';
 
 export interface GpsOverlayInput {
 	points: GpsPoint[];
@@ -28,6 +29,10 @@ export interface GpsOverlayInput {
 	showDistance: boolean;
 	showCoordinates: boolean;
 	showDateTime: boolean;
+	/** Frame edges covered by a social app's interface; the map stays inside the rest. */
+	safeArea?: SafeArea | null;
+	/** Area the map must not cover (the title), in fractions of the frame. */
+	avoid?: FrameRect | null;
 }
 
 type DrawingContext = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -87,12 +92,34 @@ export class GpsMiniMap {
 		);
 		const heightRatio = 0.6 + informationRatio;
 		const margin = Math.round(Math.min(frameWidth, frameHeight) * 0.035);
+		const safe = input.safeArea;
+		const inset = (fraction: number | undefined, edge: number) =>
+			safe && fraction !== undefined ? Math.max(margin, Math.round(edge * fraction)) : margin;
+		const left = inset(safe?.left, frameWidth);
+		const right = inset(safe?.right, frameWidth);
+		const top = inset(safe?.top, frameHeight);
+		const bottom = inset(safe?.bottom, frameHeight);
 		const desiredWidth = frameWidth * input.size / 100;
-		this.width = Math.round(Math.min(desiredWidth, (frameHeight - margin * 2) / heightRatio));
+		this.width = Math.max(
+			16,
+			Math.round(Math.min(desiredWidth, (frameHeight - top - bottom) / heightRatio, frameWidth - left - right)),
+		);
 		this.height = Math.round(this.width * heightRatio);
 		this.padding = Math.max(8, Math.round(this.width * 0.055));
-		this.x = input.position.endsWith('right') ? frameWidth - this.width - margin : margin;
-		this.y = input.position.startsWith('bottom') ? frameHeight - this.height - margin : margin;
+		const atBottom = input.position.startsWith('bottom');
+		this.x = input.position.endsWith('right') ? frameWidth - this.width - right : left;
+		let y = atBottom ? frameHeight - this.height - bottom : top;
+		if (input.avoid) {
+			// Slide away from the title along the map's own edge of the frame instead of covering it.
+			const avoidX = input.avoid.x * frameWidth;
+			const avoidY = input.avoid.y * frameHeight;
+			const avoidRight = avoidX + input.avoid.width * frameWidth;
+			const avoidBottom = avoidY + input.avoid.height * frameHeight;
+			const overlaps =
+				this.x < avoidRight && this.x + this.width > avoidX && y < avoidBottom && y + this.height > avoidY;
+			if (overlaps) y = atBottom ? avoidY - this.height : avoidBottom;
+		}
+		this.y = Math.round(Math.min(Math.max(0, y), frameHeight - this.height));
 
 		const minLatitude = Math.min(...input.points.map((point) => point.latitude));
 		const maxLatitude = Math.max(...input.points.map((point) => point.latitude));

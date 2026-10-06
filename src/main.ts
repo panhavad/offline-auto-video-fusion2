@@ -3,15 +3,29 @@ import { APP_VERSION } from 'virtual:app-version';
 import { formatFrameRate, resolveFrameRate } from './lib/framerate';
 import { parseGpsFile } from './lib/gps';
 import { FACE_BLUR_LABELS } from './lib/face-blur';
-import { GpsMiniMap } from './lib/gps-map';
+import { GpsMiniMap, type GpsOverlayInput } from './lib/gps-map';
 import { formatOffset, isTimedTrack, planGpsMatches } from './lib/gps-match';
 import { describeHardware, detectHardware } from './lib/hardware';
+import { TRANSITION_LABELS, segmentTransitions } from './lib/effects';
+import { highlightResolution, planHighlight, type HighlightPlan } from './lib/highlight';
 import { formatSize, isCropped, parseAspectRatio, resolveFitMode, resolveOutputSize } from './lib/resolution';
-import { DEFAULT_SETTINGS, loadSettings, saveSettings, type AppSettings } from './lib/settings';
+import { overlayRect, safeAreaFor, type FrameRect } from './lib/safe-area';
+import {
+	DEFAULT_SETTINGS,
+	loadSettings,
+	sanitizeHighlightClipSeconds,
+	sanitizeHighlightMaxSeconds,
+	sanitizeTitleScale,
+	saveSettings,
+	type AppSettings,
+} from './lib/settings';
 import { STABILIZER_LABELS } from './lib/stabilizer';
-import { renderTitleOverlay } from './lib/title-overlay';
+import { TEXT_STYLE_LABELS, renderTitleOverlay } from './lib/title-overlay';
 import { CREATION_DATE_SOURCE_LABELS, type CreationDateSource } from './lib/video-date';
+import { PreviewPlayer, formatPreviewTime, type PreviewSegment, type PreviewState } from './preview-player';
 import type {
+	ClipSegment,
+	FitMode,
 	MergeItem,
 	MergeProgress,
 	MergeSettings,
@@ -29,8 +43,10 @@ const PROBE_CONCURRENCY = 4;
 /** Upper bound for the metadata worker pool, so scanning never starves the rest of the machine. */
 const PROBE_POOL_LIMIT = 4;
 /** Files this app produced (e.g. merged-20250904-101500.mp4) must not become inputs of the next run. */
-const OUTPUT_NAME_PATTERN = /^merged-\d{8}-\d{6}\.mp4$/i;
+const OUTPUT_NAME_PATTERN = /^(merged|highlight)-\d{8}-\d{6}\.mp4$/i;
 const APP_NAME = 'Offline Auto Video Fusion';
+/** Long edge of the live preview canvas; plenty for judging the look without taxing the page. */
+const PLAYER_LONG_EDGE = 960;
 
 type ClipStatus = 'pending' | 'probing' | 'ready' | 'unreadable' | 'encoding' | 'merged' | 'failed';
 
@@ -74,6 +90,7 @@ const ui = {
 	titleColor: el<HTMLInputElement>('title-color'),
 	titleColorHex: el<HTMLInputElement>('title-color-hex'),
 	titleScale: el<HTMLInputElement>('title-scale'),
+	titleStyle: el<HTMLSelectElement>('title-style'),
 	resolution: el<HTMLSelectElement>('resolution'),
 	aspectRatio: el<HTMLSelectElement>('aspect-ratio'),
 	frameRate: el<HTMLSelectElement>('frame-rate'),
@@ -102,6 +119,32 @@ const ui = {
 	overlayPreview: el<HTMLCanvasElement>('overlay-preview'),
 	overlayPreviewLabel: el<HTMLSpanElement>('overlay-preview-label'),
 	overlayPreviewNote: el<HTMLSpanElement>('overlay-preview-note'),
+	modeMerge: el<HTMLInputElement>('mode-merge'),
+	modeHighlight: el<HTMLInputElement>('mode-highlight'),
+	highlightControls: el<HTMLDivElement>('highlight-controls'),
+	formatVertical: el<HTMLInputElement>('format-vertical'),
+	formatLandscape: el<HTMLInputElement>('format-landscape'),
+	highlightSeconds: el<HTMLInputElement>('highlight-seconds'),
+	highlightMax: el<HTMLInputElement>('highlight-max'),
+	highlightPick: el<HTMLSelectElement>('highlight-pick'),
+	highlightFraming: el<HTMLSelectElement>('highlight-framing'),
+	transition: el<HTMLSelectElement>('transition'),
+	highlightInfo: el<HTMLParagraphElement>('highlight-info'),
+	mergeModeInfo: el<HTMLParagraphElement>('merge-mode-info'),
+	playerBlock: el<HTMLDivElement>('player-block'),
+	playerLabel: el<HTMLSpanElement>('player-label'),
+	playerFullscreen: el<HTMLButtonElement>('player-fullscreen'),
+	playerCanvas: el<HTMLCanvasElement>('player-canvas'),
+	playerPrev: el<HTMLButtonElement>('player-prev'),
+	playerPlay: el<HTMLButtonElement>('player-play'),
+	playerNext: el<HTMLButtonElement>('player-next'),
+	playerSeek: el<HTMLInputElement>('player-seek'),
+	playerTime: el<HTMLSpanElement>('player-time'),
+	playerMute: el<HTMLButtonElement>('player-mute'),
+	playerNote: el<HTMLSpanElement>('player-note'),
+	playerSafeWrap: el<HTMLLabelElement>('player-safe-wrap'),
+	playerSafe: el<HTMLInputElement>('player-safe'),
+	mergeHeading: el<HTMLSpanElement>('merge-heading'),
 	clipCount: el<HTMLSpanElement>('clip-count'),
 	sortKey: el<HTMLSelectElement>('sort-key'),
 	sortDir: el<HTMLButtonElement>('sort-dir'),
@@ -233,14 +276,53 @@ const renderGpsInfoOrder = () => {
 	});
 };
 
+interface TitleLook {
+	position: AppSettings['titlePosition'];
+	scale: number;
+	style: AppSettings['textStyle'];
+}
+
+/** Title position, size and style of the given output mode; each mode keeps its own. */
+const titleLookOf = (mode: AppSettings['outputMode']): TitleLook =>
+	mode === 'highlight'
+		? { position: settings.highlightTitlePosition, scale: settings.highlightTitleScale, style: settings.highlightTextStyle }
+		: { position: settings.titlePosition, scale: settings.titleScale, style: settings.textStyle };
+
+const storeTitleLook = (mode: AppSettings['outputMode'], look: TitleLook) => {
+	if (mode === 'highlight') {
+		settings.highlightTitlePosition = look.position;
+		settings.highlightTitleScale = look.scale;
+		settings.highlightTextStyle = look.style;
+	} else {
+		settings.titlePosition = look.position;
+		settings.titleScale = look.scale;
+		settings.textStyle = look.style;
+	}
+};
+
+const showTitleLook = () => {
+	const look = titleLookOf(settings.outputMode);
+	ui.titlePosition.value = look.position;
+	ui.titleScale.value = String(look.scale);
+	ui.titleStyle.value = look.style;
+};
+
 const applySettingsToForm = () => {
 	ui.orientation.value = settings.orientation;
 	ui.maxClip.value = String(settings.maxClipSeconds);
 	ui.titleText.value = settings.title;
-	ui.titlePosition.value = settings.titlePosition;
 	ui.titleColor.value = settings.titleColor;
 	ui.titleColorHex.value = settings.titleColor;
-	ui.titleScale.value = String(settings.titleScale);
+	showTitleLook();
+	ui.modeMerge.checked = settings.outputMode === 'merge';
+	ui.modeHighlight.checked = settings.outputMode === 'highlight';
+	ui.formatVertical.checked = settings.highlightFormat === '9:16';
+	ui.formatLandscape.checked = settings.highlightFormat === '16:9';
+	ui.highlightSeconds.value = String(settings.highlightClipSeconds);
+	ui.highlightMax.value = String(settings.highlightMaxSeconds);
+	ui.highlightPick.value = settings.highlightPick;
+	ui.highlightFraming.value = settings.highlightFraming;
+	ui.transition.value = settings.transition;
 	ui.resolution.value = settings.resolution;
 	ui.aspectRatio.value = settings.aspectRatio;
 	ui.frameRate.value = settings.frameRate === 'auto' ? 'auto' : String(settings.frameRate);
@@ -264,15 +346,30 @@ const applySettingsToForm = () => {
 	ui.sortKey.value = settings.sortKey;
 	ui.recursive.checked = settings.recursive;
 	updateSortButton();
+	applyModeState();
 };
 
 const readSettingsFromForm = () => {
 	settings.orientation = ui.orientation.value as AppSettings['orientation'];
 	settings.maxClipSeconds = Math.max(0, Number(ui.maxClip.value) || 0);
 	settings.title = ui.titleText.value;
-	settings.titlePosition = ui.titlePosition.value as AppSettings['titlePosition'];
 	settings.titleColor = ui.titleColor.value.toUpperCase();
-	settings.titleScale = Math.min(30, Math.max(2, Number(ui.titleScale.value) || DEFAULT_SETTINGS.titleScale));
+	// The title controls still show the look of the mode that was active until now, so they are
+	// stored for that mode before a mode switch swaps in the other mode's look.
+	const previousMode = settings.outputMode;
+	storeTitleLook(previousMode, {
+		position: ui.titlePosition.value as AppSettings['titlePosition'],
+		scale: sanitizeTitleScale(ui.titleScale.value, titleLookOf(previousMode).scale),
+		style: ui.titleStyle.value as AppSettings['textStyle'],
+	});
+	settings.outputMode = ui.modeHighlight.checked ? 'highlight' : 'merge';
+	if (settings.outputMode !== previousMode) showTitleLook();
+	settings.highlightFormat = ui.formatLandscape.checked ? '16:9' : '9:16';
+	settings.highlightClipSeconds = sanitizeHighlightClipSeconds(ui.highlightSeconds.value);
+	settings.highlightMaxSeconds = sanitizeHighlightMaxSeconds(ui.highlightMax.value);
+	settings.highlightPick = ui.highlightPick.value as AppSettings['highlightPick'];
+	settings.highlightFraming = ui.highlightFraming.value as AppSettings['highlightFraming'];
+	settings.transition = ui.transition.value as AppSettings['transition'];
 	settings.resolution = ui.resolution.value as AppSettings['resolution'];
 	settings.aspectRatio = ui.aspectRatio.value as AppSettings['aspectRatio'];
 	settings.frameRate =
@@ -308,37 +405,80 @@ const updateSortButton = () => {
 	ui.clipTable.classList.toggle('manual-order', manual);
 };
 
-const mergeSettings = (): MergeSettings => ({
-	orientation: settings.orientation,
-	maxClipSeconds: settings.maxClipSeconds,
-	title: settings.title.replace(/\\n/g, '\n'),
-	titlePosition: settings.titlePosition,
-	titleColor: settings.titleColor,
-	titleScale: settings.titleScale,
-	titleShadow: settings.titleShadow,
-	fit: settings.fit,
-	resolution: settings.resolution,
-	aspectRatio: settings.aspectRatio,
-	quality: settings.quality,
-	frameRate: settings.frameRate,
-	stabilize: settings.stabilize,
-	faceBlur: settings.faceBlur,
-	includeAudio: settings.includeAudio,
-	preferHardware: settings.preferHardware,
-	accelerationMode: settings.accelerationMode,
-	gpsMapPosition: settings.gpsMapPosition,
-	gpsMapSize: settings.gpsMapSize,
-	gpsMapBackground: settings.gpsMapBackground,
-	gpsMapRotation: settings.gpsMapRotation,
-	gpsMapOpacity: settings.gpsMapOpacity,
-	gpsInfoOrder: settings.gpsInfoOrder,
-	gpsMatchTolerance: settings.gpsMatchTolerance,
-	gpsShowSpeed: settings.gpsShowSpeed,
-	gpsShowAltitude: settings.gpsShowAltitude,
-	gpsShowDistance: settings.gpsShowDistance,
-	gpsShowCoordinates: settings.gpsShowCoordinates,
-	gpsShowDateTime: settings.gpsShowDateTime,
-});
+const isHighlight = (): boolean => settings.outputMode === 'highlight';
+
+/** Disables the controls that a highlight reel replaces, and relabels the render step. */
+const applyModeState = () => {
+	const highlight = isHighlight();
+	ui.highlightControls.classList.toggle('hidden', !highlight);
+	ui.mergeModeInfo.classList.toggle('hidden', highlight);
+	// App safe zones only matter for a reel that is posted to a social feed.
+	ui.playerSafeWrap.classList.toggle('hidden', !highlight);
+	const replaced: [HTMLInputElement | HTMLSelectElement, string][] = [
+		[ui.orientation, 'A highlight reel uses clips of every orientation'],
+		[ui.maxClip, 'A highlight reel takes "Seconds per clip" from each clip instead'],
+		[ui.aspectRatio, 'A highlight reel uses its own 9:16 or 16:9 format'],
+	];
+	for (const [control, reason] of replaced) {
+		control.disabled = merging || highlight;
+		control.title = highlight ? reason : '';
+	}
+	ui.start.textContent = highlight ? 'Create highlight' : 'Start merge';
+	ui.mergeHeading.textContent = highlight ? 'Render highlight' : 'Merge';
+};
+
+const mergeSettings = (): MergeSettings => {
+	const highlight = isHighlight();
+	const first = highlight ? sortedEntries().find(isEligible)?.probe : null;
+	const look = titleLookOf(settings.outputMode);
+	return {
+		orientation: highlight ? 'any' : settings.orientation,
+		maxClipSeconds: settings.maxClipSeconds,
+		title: settings.title.replace(/\\n/g, '\n'),
+		titlePosition: look.position,
+		titleColor: settings.titleColor,
+		titleScale: look.scale,
+		titleShadow: settings.titleShadow,
+		textStyle: look.style,
+		fit: settings.fit,
+		resolution: highlight
+			? highlightResolution(settings.resolution, first?.width ?? 0, first?.height ?? 0)
+			: settings.resolution,
+		aspectRatio: highlight ? settings.highlightFormat : settings.aspectRatio,
+		quality: settings.quality,
+		frameRate: settings.frameRate,
+		stabilize: settings.stabilize,
+		faceBlur: settings.faceBlur,
+		includeAudio: settings.includeAudio,
+		preferHardware: settings.preferHardware,
+		accelerationMode: settings.accelerationMode,
+		gpsMapPosition: settings.gpsMapPosition,
+		gpsMapSize: settings.gpsMapSize,
+		gpsMapBackground: settings.gpsMapBackground,
+		gpsMapRotation: settings.gpsMapRotation,
+		gpsMapOpacity: settings.gpsMapOpacity,
+		gpsInfoOrder: settings.gpsInfoOrder,
+		gpsMatchTolerance: settings.gpsMatchTolerance,
+		gpsShowSpeed: settings.gpsShowSpeed,
+		gpsShowAltitude: settings.gpsShowAltitude,
+		gpsShowDistance: settings.gpsShowDistance,
+		gpsShowCoordinates: settings.gpsShowCoordinates,
+		gpsShowDateTime: settings.gpsShowDateTime,
+		outputMode: settings.outputMode,
+		highlightFormat: settings.highlightFormat,
+		highlightClipSeconds: settings.highlightClipSeconds,
+		highlightMaxSeconds: settings.highlightMaxSeconds,
+		highlightPick: settings.highlightPick,
+		highlightFraming: settings.highlightFraming,
+		transition: settings.transition,
+	};
+};
+
+/** Fit used for clips whose shape differs from the output frame, exactly as the worker picks it. */
+const outputFit = (merge: MergeSettings): FitMode =>
+	merge.outputMode === 'highlight'
+		? merge.highlightFraming === 'blur' ? 'contain' : 'cover'
+		: resolveFitMode(merge.resolution, merge.aspectRatio, merge.fit);
 
 // ---------------------------------------------------------------------------
 // Clip helpers
@@ -364,12 +504,90 @@ const plannedSeconds = (entry: ClipEntry): number => {
 
 const orientationMatches = (entry: ClipEntry): boolean => {
 	if (!entry.probe?.ok) return false;
-	if (settings.orientation === 'any') return true;
+	// A highlight reframes every clip into its own format, so it takes all orientations.
+	if (settings.orientation === 'any' || isHighlight()) return true;
 	return entry.probe.orientation === settings.orientation;
 };
 
 const isEligible = (entry: ClipEntry): boolean =>
 	entry.included && Boolean(entry.probe?.ok) && orientationMatches(entry);
+
+interface PlannedClip {
+	entry: ClipEntry;
+	/** Highlight segment, or null when the clip is used from its start (merge mode). */
+	segment: ClipSegment | null;
+	seconds: number;
+}
+
+/**
+ * What the output will consist of. Summary, preview and render all use this, so the preview
+ * always shows exactly what will be encoded.
+ */
+const planOutput = (eligible: ClipEntry[]): { clips: PlannedClip[]; highlight: HighlightPlan | null } => {
+	if (!isHighlight()) {
+		return {
+			clips: eligible.map((entry) => ({ entry, segment: null, seconds: plannedSeconds(entry) })),
+			highlight: null,
+		};
+	}
+	const plan = planHighlight(
+		eligible.map((entry) => entry.probe?.duration ?? 0),
+		settings.highlightClipSeconds,
+		settings.highlightMaxSeconds,
+		settings.highlightPick,
+	);
+	const clips = eligible
+		.map((entry, index) => ({ entry, segment: plan.segments[index], seconds: plan.segments[index].seconds }))
+		// A clip whose length could not be read has nothing to contribute.
+		.filter((clip) => clip.seconds > 0.01);
+	return { clips, highlight: plan };
+};
+
+/** Mini-map input per clip, matched to the GPS track the same way the worker does it. */
+const gpsInputsFor = (clips: PlannedClip[], avoid: FrameRect | null): Map<string, GpsOverlayInput> => {
+	const inputs = new Map<string, GpsOverlayInput>();
+	if (!gpsTrack) return inputs;
+	const safeArea = safeAreaFor(settings);
+	const plan = isTimedTrack(gpsTrack.points)
+		? planGpsMatches(
+				gpsTrack.points,
+				clips.map((clip) => ({
+					id: clip.entry.id,
+					recordedAt: createdAtOf(clip.entry),
+					durationMs: clip.seconds * 1000,
+					location: clip.entry.probe?.location ?? null,
+				})),
+				settings.gpsMatchTolerance,
+			)
+		: null;
+	for (const clip of clips) {
+		const offsetMs = (clip.segment?.start ?? 0) * 1000;
+		const recordedAt = createdAtOf(clip.entry);
+		const match = plan?.matches.get(clip.entry.id);
+		const trackStart = match?.trackStartTime ?? recordedAt;
+		inputs.set(clip.entry.id, {
+			points: gpsTrack.points,
+			clipStartTime: recordedAt + offsetMs,
+			trackStartTime: trackStart === null ? null : trackStart + offsetMs,
+			matchToleranceMs: match?.toleranceMs ?? settings.gpsMatchTolerance * 60_000,
+			clipDuration: clip.seconds,
+			position: settings.gpsMapPosition,
+			size: settings.gpsMapSize,
+			background: settings.gpsMapBackground,
+			opacity: settings.gpsMapOpacity,
+			rotation: settings.gpsMapRotation,
+			informationOrder: settings.gpsInfoOrder,
+			showSpeed: settings.gpsShowSpeed,
+			showAltitude: settings.gpsShowAltitude,
+			showDistance: settings.gpsShowDistance,
+			showCoordinates: settings.gpsShowCoordinates,
+			showDateTime: settings.gpsShowDateTime,
+			safeArea,
+			avoid,
+		});
+	}
+	return inputs;
+};
 
 const comparePaths = (a: ClipEntry, b: ClipEntry): number =>
 	a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' });
@@ -423,7 +641,11 @@ const clearDropMarkers = () => {
 	}
 };
 
-const previewGpsInput = (position = settings.gpsMapPosition, size = settings.gpsMapSize) => {
+const previewGpsInput = (
+	position = settings.gpsMapPosition,
+	size = settings.gpsMapSize,
+	avoid: FrameRect | null = null,
+): GpsOverlayInput | null => {
 	if (!gpsTrack) return null;
 	const firstTime = gpsTrack.points[0].timestamp;
 	const lastTime = gpsTrack.points[gpsTrack.points.length - 1].timestamp;
@@ -447,6 +669,8 @@ const previewGpsInput = (position = settings.gpsMapPosition, size = settings.gps
 		showDistance: settings.gpsShowDistance,
 		showCoordinates: settings.gpsShowCoordinates,
 		showDateTime: settings.gpsShowDateTime,
+		safeArea: safeAreaFor(settings),
+		avoid,
 	};
 };
 
@@ -501,16 +725,16 @@ const drawGpsAtMidpoint = (
 	context: CanvasRenderingContext2D,
 	width: number,
 	height: number,
-	position = settings.gpsMapPosition,
-	size = settings.gpsMapSize,
+	avoid: FrameRect | null = null,
 ) => {
-	const input = previewGpsInput(position, size);
+	const input = previewGpsInput(settings.gpsMapPosition, settings.gpsMapSize, avoid);
 	if (!input) return;
 	new GpsMiniMap(input, width, height).draw(context, input.clipDuration / 2);
 };
 
 const updateOverlayPreviews = () => {
-	const forcedRatio = parseAspectRatio(settings.aspectRatio);
+	const merge = mergeSettings();
+	const forcedRatio = parseAspectRatio(merge.aspectRatio);
 	const firstClip = sortedEntries().find(isEligible)?.probe;
 	const ratio = forcedRatio ??
 		(firstClip && firstClip.width > 0 && firstClip.height > 0
@@ -522,17 +746,106 @@ const updateOverlayPreviews = () => {
 	ui.overlayPreview.width = outputWidth;
 	ui.overlayPreview.height = outputHeight;
 	ui.overlayPreviewLabel.textContent =
-		`${settings.aspectRatio === 'auto' ? 'Auto' : settings.aspectRatio} preview · ${outputWidth}×${outputHeight}`;
+		`${merge.aspectRatio === 'auto' ? 'Auto' : merge.aspectRatio} preview · ${outputWidth}×${outputHeight}`;
 	const outputContext = drawPreviewBackground(ui.overlayPreview, 'VIDEO PREVIEW');
 	if (outputContext) {
-		const title = renderTitleOverlay(mergeSettings(), outputWidth, outputHeight);
+		const safeArea = safeAreaFor(merge);
+		const title = renderTitleOverlay(merge, outputWidth, outputHeight, safeArea);
 		if (title) outputContext.drawImage(title.canvas, title.x, title.y);
-		drawGpsAtMidpoint(outputContext, outputWidth, outputHeight);
+		drawGpsAtMidpoint(
+			outputContext,
+			outputWidth,
+			outputHeight,
+			safeArea ? overlayRect(title, outputWidth, outputHeight) : null,
+		);
 	}
 
 	ui.overlayPreviewNote.textContent = gpsTrack
 		? 'Shows the title style and the mini map at the route midpoint.'
 		: 'Shows the title style. Add a GPS file to preview the mini map here too.';
+	schedulePlayerUpdate();
+};
+
+// ---------------------------------------------------------------------------
+// Live output preview
+// ---------------------------------------------------------------------------
+
+let playerSeeking = false;
+
+const renderPlayerState = (state: PreviewState) => {
+	ui.playerPlay.textContent = state.playing ? '❚❚ Pause' : '▶ Play';
+	ui.playerPlay.disabled = state.count === 0;
+	ui.playerPrev.disabled = state.count === 0;
+	ui.playerNext.disabled = state.count === 0 || state.index >= state.count - 1;
+	ui.playerSeek.disabled = state.count === 0;
+	ui.playerSeek.max = String(Math.max(0.01, state.duration));
+	if (!playerSeeking) ui.playerSeek.value = String(state.time);
+	ui.playerTime.textContent = `${formatPreviewTime(state.time)} / ${formatPreviewTime(state.duration)}`;
+	ui.playerMute.textContent = state.muted ? '🔇' : '🔊';
+	ui.playerMute.setAttribute('aria-pressed', String(state.muted));
+	ui.playerMute.title = state.muted ? 'Unmute preview' : 'Mute preview';
+	ui.playerNote.textContent =
+		state.count === 0
+			? 'Choose a folder to preview the output here.'
+			: `Clip ${state.index + 1}/${state.count}: ${state.name}`;
+};
+
+const player = new PreviewPlayer(ui.playerCanvas, renderPlayerState);
+let playerTimer = 0;
+
+/** Rebuilds the preview from the current clips and settings; debounced, as render() runs often. */
+const schedulePlayerUpdate = () => {
+	clearTimeout(playerTimer);
+	playerTimer = window.setTimeout(updatePlayer, 120);
+};
+
+const updatePlayer = () => {
+	const merge = mergeSettings();
+	const highlight = merge.outputMode === 'highlight';
+	const eligible = sortedEntries().filter(isEligible);
+	const { clips } = planOutput(eligible);
+	const first = eligible[0]?.probe;
+	const forced = parseAspectRatio(merge.aspectRatio);
+	const output = first
+		? resolveOutputSize(merge.resolution, merge.aspectRatio, first.width, first.height)
+		: forced !== null && forced < 1
+			? { width: 1080, height: Math.round(1080 / forced) }
+			: { width: 1920, height: 1080 };
+	const ratio = output.width / output.height;
+	const width = ratio >= 1 ? PLAYER_LONG_EDGE : Math.round(PLAYER_LONG_EDGE * ratio);
+	const height = ratio >= 1 ? Math.round(PLAYER_LONG_EDGE / ratio) : PLAYER_LONG_EDGE;
+	const fit = outputFit(merge);
+	const safeArea = safeAreaFor(merge);
+	const title = renderTitleOverlay(merge, width, height, safeArea);
+	const gps = gpsInputsFor(clips, safeArea ? overlayRect(title, width, height) : null);
+
+	const segments: PreviewSegment[] = clips.map((clip, index) => ({
+		id: clip.entry.id,
+		name: clip.entry.path,
+		file: clip.entry.file,
+		start: clip.segment?.start ?? 0,
+		seconds: clip.seconds,
+		transitions: highlight ? segmentTransitions(merge.transition, index, clips.length, clip.seconds) : null,
+		titleIntro: highlight && index === 0,
+		gps: gps.get(clip.entry.id) ?? null,
+		seed: index * 7919 + 17,
+	}));
+
+	player.setComposition({
+		width,
+		height,
+		fit,
+		blurredBackdrop: highlight && fit === 'contain',
+		title,
+		safeArea,
+		segments,
+	});
+
+	const total = clips.reduce((sum, clip) => sum + clip.seconds, 0);
+	const shape = output.width > output.height ? 'landscape' : output.width < output.height ? 'vertical' : 'square';
+	ui.playerLabel.textContent =
+		`${highlight ? 'Highlight' : 'Full merge'} · ${merge.aspectRatio === 'auto' ? shape : `${merge.aspectRatio} ${shape}`} · ` +
+		`${formatSize(output)} · ${formatPreviewTime(total)}`;
 };
 
 // ---------------------------------------------------------------------------
@@ -697,10 +1010,47 @@ const updateSummary = () => {
 
 	if (entries.length === 0) {
 		ui.mergeSummary.textContent = 'Nothing to merge yet.';
+		ui.highlightInfo.textContent = 'Choose a folder: every clip will get its own moment in the reel.';
 	} else if (eligible.length === 0) {
 		ui.mergeSummary.textContent = probing
 			? 'Reading video metadata…'
-			: 'No clip matches the current orientation filter.';
+			: isHighlight() ? 'No clip is selected.' : 'No clip matches the current orientation filter.';
+		ui.highlightInfo.textContent = '';
+	} else if (isHighlight()) {
+		const merge = mergeSettings();
+		const { clips, highlight } = planOutput(eligible);
+		const total = highlight?.totalSeconds ?? 0;
+		const output = resolveOutputSize(
+			merge.resolution,
+			merge.aspectRatio,
+			eligible[0].probe?.width ?? 0,
+			eligible[0].probe?.height ?? 0,
+		);
+		const resolvedFps = resolveFrameRate(
+			settings.frameRate,
+			eligible.map((entry) => entry.probe?.frameRate ?? null),
+		);
+		const reframed = eligible.filter((entry) => isCropped(entry.probe?.width ?? 0, entry.probe?.height ?? 0, output)).length;
+		const perClip = highlight?.secondsPerClip ?? 0;
+		ui.mergeSummary.textContent =
+			`Highlight reel · ${clips.length} clip${clips.length === 1 ? '' : 's'} · ≈ ${formatPreviewTime(total)}` +
+			` · ${merge.aspectRatio} ${formatSize(output)}` +
+			`${reframed > 0 ? ` · ${reframed} ${merge.highlightFraming === 'blur' ? 'framed over a blurred background' : 'cropped to fill'}` : ''}` +
+			` · ${TRANSITION_LABELS[merge.transition]}` +
+			`${settings.title.trim() ? ` · ${TEXT_STYLE_LABELS[merge.textStyle]} title` : ''}` +
+			` · ${settings.frameRate === 'auto' ? `auto ${formatFrameRate(resolvedFps)}` : formatFrameRate(resolvedFps)}` +
+			`${settings.stabilize === 'off' ? '' : ` · ${STABILIZER_LABELS[settings.stabilize]} stabilization`}` +
+			`${settings.faceBlur === 'off' ? '' : ` · ${FACE_BLUR_LABELS[settings.faceBlur]}`}` +
+			`${gpsTrack ? ' · GPS mini map' : ''}` +
+			`${probing ? ' · still reading metadata…' : ''}`;
+		ui.highlightInfo.textContent =
+			`${clips.length} clip${clips.length === 1 ? '' : 's'} × ${perClip.toFixed(perClip < 1 ? 2 : 1)}s = ${formatPreviewTime(total)} ` +
+			`(limit ${settings.highlightMaxSeconds}s).` +
+			(highlight?.shortened
+				? ` Segments were shortened from ${settings.highlightClipSeconds}s so that all ${clips.length} clips fit.`
+				: total < settings.highlightMaxSeconds - 0.05 && clips.length > 0
+					? ' Every clip is in, with room to spare.'
+					: '');
 	} else {
 		const trimmed = eligible.filter((entry) => settings.maxClipSeconds > 0 && (entry.probe?.duration ?? 0) > settings.maxClipSeconds).length;
 		const resolvedFps = resolveFrameRate(
@@ -919,6 +1269,16 @@ const setBusy = (busy: boolean) => {
 		ui.titleColor,
 		ui.titleColorHex,
 		ui.titleScale,
+		ui.titleStyle,
+		ui.modeMerge,
+		ui.modeHighlight,
+		ui.formatVertical,
+		ui.formatLandscape,
+		ui.highlightSeconds,
+		ui.highlightMax,
+		ui.highlightPick,
+		ui.highlightFraming,
+		ui.transition,
 		ui.resolution,
 		ui.aspectRatio,
 		ui.frameRate,
@@ -947,6 +1307,7 @@ const setBusy = (busy: boolean) => {
 	for (const control of controls) (control as HTMLInputElement).disabled = busy;
 	updateSortButton();
 	renderGpsInfoOrder();
+	applyModeState();
 	ui.start.classList.toggle('hidden', busy);
 	ui.cancel.classList.toggle('hidden', !busy);
 	ui.cancel.disabled = false;
@@ -1132,7 +1493,13 @@ const startMerge = async () => {
 
 		ui.download.classList.add('hidden');
 		ui.openOutput.classList.add('hidden');
-		outputFileName = `merged-${timestampSlug()}.mp4`;
+		const highlight = isHighlight();
+		const { clips, highlight: highlightPlan } = planOutput(eligible);
+		if (clips.length === 0) {
+			addLog('Nothing to render - none of the selected clips has a readable length.', 'warn');
+			return;
+		}
+		outputFileName = `${highlight ? 'highlight' : 'merged'}-${timestampSlug()}.mp4`;
 		generatedOutputs.add(outputFileName);
 
 		const output = await createOutputTarget(outputFileName);
@@ -1141,26 +1508,39 @@ const startMerge = async () => {
 		outputIsBuffer = output.target.kind === 'buffer';
 		outputFileHandle = output.handle ?? null;
 		discardOutput = output.discard ?? null;
+		// The preview decodes the same files; pausing it leaves the decoders to the render.
+		player.pause();
 
-		const items: MergeItem[] = eligible.map((entry) => {
+		const items: MergeItem[] = clips.map(({ entry, segment, seconds }) => {
 			entry.status = 'encoding';
 			entry.note = '';
 			return {
 				id: entry.id,
 				name: entry.path,
 				file: entry.file,
-				plannedSeconds: plannedSeconds(entry),
+				plannedSeconds: seconds,
 				sourceFrameRate: entry.probe?.frameRate ?? null,
 				recordedAt: createdAtOf(entry),
 				recordedAtSource: createdAtSourceOf(entry),
 				recordedLocation: entry.probe?.location ?? null,
+				segment,
 			};
 		});
 
 		setBusy(true);
 		resetProgressUi();
 		render();
-		addLog(`Merging ${items.length} clip${items.length === 1 ? '' : 's'} → ${output.where}`);
+		if (highlight && highlightPlan) {
+			addLog(
+				`Creating a ${settings.highlightFormat} highlight reel from ${items.length} clip${items.length === 1 ? '' : 's'} ` +
+					`(${formatPreviewTime(highlightPlan.totalSeconds)}) → ${output.where}` +
+					(highlightPlan.shortened
+						? ` · segments shortened to ${highlightPlan.secondsPerClip.toFixed(2)}s so every clip fits`
+						: ''),
+			);
+		} else {
+			addLog(`Merging ${items.length} clip${items.length === 1 ? '' : 's'} → ${output.where}`);
+		}
 		send({ type: 'merge', request: { items, settings: mergeSettings(), target: output.target, gpsTrack } });
 	} finally {
 		starting = false;
@@ -1340,6 +1720,16 @@ for (const control of [
 	ui.titleText,
 	ui.titlePosition,
 	ui.titleScale,
+	ui.titleStyle,
+	ui.modeMerge,
+	ui.modeHighlight,
+	ui.formatVertical,
+	ui.formatLandscape,
+	ui.highlightSeconds,
+	ui.highlightMax,
+	ui.highlightPick,
+	ui.highlightFraming,
+	ui.transition,
 	ui.resolution,
 	ui.aspectRatio,
 	ui.frameRate,
@@ -1361,6 +1751,10 @@ for (const control of [
 ]) {
 	control.addEventListener('change', () => {
 		readSettingsFromForm();
+		// Show the values that are actually used, e.g. after an out-of-range entry was clamped.
+		ui.highlightSeconds.value = String(settings.highlightClipSeconds);
+		ui.highlightMax.value = String(settings.highlightMaxSeconds);
+		applyModeState();
 		render();
 	});
 }
@@ -1371,6 +1765,34 @@ for (const control of [ui.titleText, ui.titleScale, ui.gpsSize, ui.gpsRotation, 
 		updateOverlayPreviews();
 	});
 }
+
+// ---------------------------------------------------------------------------
+// Live preview controls
+// ---------------------------------------------------------------------------
+
+ui.playerPlay.addEventListener('click', () => player.toggle());
+ui.playerCanvas.addEventListener('click', () => player.toggle());
+ui.playerPrev.addEventListener('click', () => player.previous());
+ui.playerNext.addEventListener('click', () => player.next());
+ui.playerMute.addEventListener('click', () => player.setMuted(ui.playerMute.getAttribute('aria-pressed') !== 'true'));
+ui.playerSafe.addEventListener('change', () => player.setShowSafeArea(ui.playerSafe.checked));
+ui.playerSeek.addEventListener('pointerdown', () => {
+	playerSeeking = true;
+});
+ui.playerSeek.addEventListener('input', () => {
+	playerSeeking = true;
+	player.seek(Number(ui.playerSeek.value));
+});
+ui.playerSeek.addEventListener('change', () => {
+	playerSeeking = false;
+	player.seek(Number(ui.playerSeek.value));
+});
+ui.playerCanvas.addEventListener('keydown', (event) => {
+	if (event.key === ' ' || event.key === 'Enter') {
+		event.preventDefault();
+		player.toggle();
+	}
+});
 
 ui.gpsInfoList.addEventListener('click', (event) => {
 	const target = event.target;
@@ -1403,6 +1825,8 @@ const togglePreviewFullscreen = async (block: HTMLElement): Promise<void> => {
 const updateFullscreenButtons = () => {
 	ui.overlayPreviewFullscreen.textContent =
 		document.fullscreenElement === ui.overlayPreviewBlock ? 'Exit full screen' : 'Full screen';
+	ui.playerFullscreen.textContent =
+		document.fullscreenElement === ui.playerBlock ? 'Exit full screen' : 'Full screen';
 };
 
 const bindFullscreenPreview = (
@@ -1421,10 +1845,16 @@ const bindFullscreenPreview = (
 
 if (document.fullscreenEnabled) {
 	bindFullscreenPreview(ui.overlayPreviewBlock, ui.overlayPreview, ui.overlayPreviewFullscreen);
+	ui.playerFullscreen.addEventListener('click', () => {
+		void togglePreviewFullscreen(ui.playerBlock).catch((error) => {
+			addLog(`Could not open full-screen preview: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+		});
+	});
 	document.addEventListener('fullscreenchange', updateFullscreenButtons);
 } else {
 	ui.overlayPreviewFullscreen.disabled = true;
 	ui.overlayPreview.style.cursor = 'default';
+	ui.playerFullscreen.disabled = true;
 }
 
 ui.gpsFile.addEventListener('change', () => {

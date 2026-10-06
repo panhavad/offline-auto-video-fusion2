@@ -32,6 +32,17 @@ export type FaceBlurSetting = 'off' | 'blur' | 'strong' | 'pixelate';
 export type AccelerationMode = 'auto' | 'max' | 'balanced' | 'safe';
 /** `auto` derives the cap from the selected clips; a number is an explicit upper limit in fps. */
 export type FrameRateSetting = number | 'auto';
+/** `merge` concatenates the clips; `highlight` cuts a short social-media reel from all of them. */
+export type OutputMode = 'merge' | 'highlight';
+/** Frame shape of a highlight reel: vertical for TikTok/Reels/Shorts, landscape for YouTube. */
+export type HighlightFormat = '9:16' | '16:9';
+/** Which part of each clip a highlight segment is taken from. */
+export type HighlightPick = 'middle' | 'start' | 'end';
+/** `blur` letterboxes each clip over a blurred, zoomed copy of itself; `crop` fills the frame. */
+export type HighlightFraming = 'blur' | 'crop';
+/** Cut effect between highlight segments; `mix` cycles through every style. */
+export type TransitionStyle = 'none' | 'mix' | 'zoom' | 'whip' | 'flash' | 'glitch' | 'spin' | 'dip';
+export type TextStyle = 'classic' | 'bold' | 'caption' | 'neon' | 'meme' | 'pop';
 export type GpsMapPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 export type GpsMapBackground = 'plain' | 'map';
 export type GpsInfoItem = 'altitude' | 'distance' | 'date-time' | 'speed' | 'coordinates';
@@ -91,6 +102,7 @@ export interface MergeSettings {
 	titleColor: string;
 	titleScale: number;
 	titleShadow: boolean;
+	textStyle: TextStyle;
 	fit: FitMode;
 	resolution: ResolutionPreset;
 	aspectRatio: AspectRatioSetting;
@@ -120,6 +132,22 @@ export interface MergeSettings {
 	gpsShowDistance: boolean;
 	gpsShowCoordinates: boolean;
 	gpsShowDateTime: boolean;
+	outputMode: OutputMode;
+	highlightFormat: HighlightFormat;
+	/** Seconds taken from each clip; shortened automatically so every clip fits the reel. */
+	highlightClipSeconds: number;
+	/** Upper limit of the complete reel, in seconds. */
+	highlightMaxSeconds: number;
+	highlightPick: HighlightPick;
+	highlightFraming: HighlightFraming;
+	transition: TransitionStyle;
+}
+
+/** The part of a clip that ends up in a highlight reel. */
+export interface ClipSegment {
+	/** Offset into the clip, in seconds. */
+	start: number;
+	seconds: number;
 }
 
 export interface MergeItem {
@@ -140,6 +168,8 @@ export interface MergeItem {
 	recordedAtSource: CreationDateSource | null;
 	/** Location embedded in the clip, used to verify and rescue GPS matches. */
 	recordedLocation: RecordedLocation | null;
+	/** Highlight segment to cut from the clip, or null to use it from the start (merge mode). */
+	segment: ClipSegment | null;
 }
 
 export type MergeTarget =

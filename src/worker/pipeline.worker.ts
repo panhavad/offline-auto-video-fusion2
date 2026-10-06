@@ -50,6 +50,8 @@ import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, AudioNormalizer } from '../lib/audio
 import { formatFrameRate, resolveFrameRate } from '../lib/framerate';
 import { describeHardware, describePlan, detectHardware, planPipeline, type PipelinePlan } from '../lib/hardware';
 import { renderTitleOverlay } from '../lib/title-overlay';
+import { overlayRect, safeAreaFor } from '../lib/safe-area';
+import { TRANSITION_LABELS, segmentTransitions } from '../lib/effects';
 import {
 	alignContainerDate,
 	isPlausibleDate,
@@ -88,6 +90,8 @@ const THUMBNAIL_MAX_HEIGHT = 90;
 const THUMBNAIL_OFFSET_SECONDS = 1;
 const VIDEO_CODEC_CANDIDATES: VideoCodec[] = ['avc', 'hevc', 'av1', 'vp9'];
 const AUDIO_CODEC_CANDIDATES: AudioCodec[] = ['aac', 'opus'];
+/** Short ramp at every highlight cut, so jumping between clips never clicks. */
+const HIGHLIGHT_AUDIO_FADE_SECONDS = 0.025;
 
 let cancelRequested = false;
 let merging = false;
@@ -522,8 +526,16 @@ async function runMerge(request: MergeRequest): Promise<void> {
 			hardware,
 		} = await pickVideoCodec(requestedSize, quality, settings.preferHardware);
 
-		const overlay = renderTitleOverlay(settings, width, height);
-		const fit = resolveFitMode(settings.resolution, settings.aspectRatio, settings.fit);
+		const highlight = settings.outputMode === 'highlight';
+		const safeArea = safeAreaFor(settings);
+		const overlay = renderTitleOverlay(settings, width, height, safeArea);
+		// In a highlight the mini map steps aside for the title instead of covering it.
+		const titleArea = highlight ? overlayRect(overlay, width, height) : null;
+		// A highlight always has a forced frame; "blur" framing letterboxes each clip over a blurred
+		// copy of itself, so nothing is cropped away and there are still no black bars.
+		const fit = highlight
+			? settings.highlightFraming === 'blur' ? 'contain' : 'cover'
+			: resolveFitMode(settings.resolution, settings.aspectRatio, settings.fit);
 		const frameRate = resolveFrameRate(settings.frameRate, items.map((item) => item.sourceFrameRate));
 
 		// How much of the machine this merge is allowed to use. Decoding and compositing scale across
@@ -591,8 +603,17 @@ async function runMerge(request: MergeRequest): Promise<void> {
 		log(
 			forcedFrame.length === 0
 				? `Frame follows the first clip: ${formatSize({ width, height })}.`
-				: `Frame forced to ${forcedFrame.join(' at ')} (${formatSize({ width, height })}); clips that do not fit are cropped to fill.`,
+				: `Frame forced to ${forcedFrame.join(' at ')} (${formatSize({ width, height })}); clips that do not fit are ` +
+						(fit === 'contain' ? 'framed over a blurred copy of themselves.' : 'cropped to fill.'),
 		);
+		if (highlight) {
+			const longest = Math.max(...items.map((item) => item.plannedSeconds));
+			const reelSeconds = items.reduce((sum, item) => sum + item.plannedSeconds, 0);
+			log(
+				`Highlight reel: ${items.length} clip${items.length === 1 ? '' : 's'}, up to ${longest.toFixed(2)}s each, ` +
+					`${reelSeconds.toFixed(1)}s in total; transitions: ${TRANSITION_LABELS[settings.transition]}.`,
+			);
+		}
 		if (settings.frameRate === 'auto') {
 			const detected = items.some((item) => typeof item.sourceFrameRate === 'number' && item.sourceFrameRate > 0);
 			log(
@@ -750,43 +771,60 @@ async function runMerge(request: MergeRequest): Promise<void> {
 		const lanes: RenderLane[] = Array.from({ length: Math.max(1, plan.renderThreads) }, createRenderLane);
 		log(`Pipeline: ${describePlan({ ...plan, renderThreads: lanes.length })}.`);
 
-		const makeJob = async (item: MergeItem): Promise<ClipRenderJob> => ({
-			file: item.file,
-			width,
-			height,
-			fit,
-			frameInterval,
-			minFrameSpacing,
-			maxClipSeconds: settings.maxClipSeconds,
-			wantAudio: Boolean(audioSource) && !audioBroken,
-			preferHardware: plan.preferHardware,
-			stabilize: settings.stabilize,
-			faceBlur: settings.faceBlur,
-			gps: gpsTrack
-				? {
-						points: gpsTrack.points,
-						clipStartTime: item.recordedAt,
-						trackStartTime: gpsPlan?.matches.get(item.id)?.trackStartTime ?? item.recordedAt,
-						matchToleranceMs: gpsPlan?.matches.get(item.id)?.toleranceMs ?? settings.gpsMatchTolerance * 60_000,
-						clipDuration: item.plannedSeconds,
-						position: settings.gpsMapPosition,
-						size: settings.gpsMapSize,
-						background: settings.gpsMapBackground,
-						opacity: settings.gpsMapOpacity,
-						rotation: settings.gpsMapRotation,
-						informationOrder: settings.gpsInfoOrder,
-						showSpeed: settings.gpsShowSpeed,
-						showAltitude: settings.gpsShowAltitude,
-						showDistance: settings.gpsShowDistance,
-						showCoordinates: settings.gpsShowCoordinates,
-						showDateTime: settings.gpsShowDateTime,
-					}
-				: null,
-			// Every lane composites on its own canvas, so each needs its own copy of the overlay.
-			overlay: overlay ? await createImageBitmap(overlay.canvas) : null,
-			overlayX: overlay?.x ?? 0,
-			overlayY: overlay?.y ?? 0,
-		});
+		const makeJob = async (item: MergeItem, index: number): Promise<ClipRenderJob> => {
+			// A highlight segment starts part-way into the clip, so the mini map's clocks move with it.
+			const offsetMs = (item.segment?.start ?? 0) * 1000;
+			const shift = (time: number | null | undefined) => (typeof time === 'number' ? time + offsetMs : null);
+			const match = gpsPlan?.matches.get(item.id);
+			return {
+				file: item.file,
+				width,
+				height,
+				fit,
+				frameInterval,
+				minFrameSpacing,
+				maxClipSeconds: item.segment ? item.segment.seconds : settings.maxClipSeconds,
+				startSeconds: item.segment?.start ?? 0,
+				wantAudio: Boolean(audioSource) && !audioBroken,
+				preferHardware: plan.preferHardware,
+				stabilize: settings.stabilize,
+				faceBlur: settings.faceBlur,
+				blurredBackdrop: highlight && fit === 'contain',
+				transitions: highlight
+					? segmentTransitions(settings.transition, index, items.length, item.plannedSeconds)
+					: null,
+				effectSeed: index * 7919 + 17,
+				titleIntro: highlight && index === 0,
+				audioFadeSeconds: highlight ? HIGHLIGHT_AUDIO_FADE_SECONDS : 0,
+				exactLength: highlight,
+				gps: gpsTrack
+					? {
+							points: gpsTrack.points,
+							clipStartTime: shift(item.recordedAt),
+							trackStartTime: shift(match?.trackStartTime ?? item.recordedAt),
+							matchToleranceMs: match?.toleranceMs ?? settings.gpsMatchTolerance * 60_000,
+							clipDuration: item.plannedSeconds,
+							position: settings.gpsMapPosition,
+							size: settings.gpsMapSize,
+							background: settings.gpsMapBackground,
+							opacity: settings.gpsMapOpacity,
+							rotation: settings.gpsMapRotation,
+							informationOrder: settings.gpsInfoOrder,
+							showSpeed: settings.gpsShowSpeed,
+							showAltitude: settings.gpsShowAltitude,
+							showDistance: settings.gpsShowDistance,
+							showCoordinates: settings.gpsShowCoordinates,
+							showDateTime: settings.gpsShowDateTime,
+							safeArea,
+							avoid: titleArea,
+						}
+					: null,
+				// Every lane composites on its own canvas, so each needs its own copy of the overlay.
+				overlay: overlay ? await createImageBitmap(overlay.canvas) : null,
+				overlayX: overlay?.x ?? 0,
+				overlayY: overlay?.y ?? 0,
+			};
+		};
 
 		const assignments = new Map<number, RenderLane>();
 		let nextJobIndex = 0;
@@ -796,7 +834,7 @@ async function runMerge(request: MergeRequest): Promise<void> {
 			if (cancelRequested || nextJobIndex >= items.length) return;
 			const index = nextJobIndex++;
 			assignments.set(index, lane);
-			lane.start(await makeJob(items[index]), plan.frameQueueDepth, plan.audioQueueDepth);
+			lane.start(await makeJob(items[index], index), plan.frameQueueDepth, plan.audioQueueDepth);
 		};
 
 		for (const lane of lanes) {

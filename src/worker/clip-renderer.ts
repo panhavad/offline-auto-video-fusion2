@@ -10,6 +10,14 @@
 import { ALL_FORMATS, AudioSampleSink, BlobSource, CanvasSink, Input, VideoSampleSink } from 'mediabunny';
 import type { AudioSample, InputVideoTrack, VideoSinkDecoderOptions } from 'mediabunny';
 import { AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, AudioNormalizer } from '../lib/audio';
+import {
+	BlurredBackdrop,
+	applyEffectOverlay,
+	drawTitle,
+	drawWithEffect,
+	effectAt,
+	type SegmentTransitions,
+} from '../lib/effects';
 import { FaceBlurrer, faceBlurPreset, loadFaceClassifier } from '../lib/face-blur';
 import { GpsMiniMap, type GpsOverlayInput } from '../lib/gps-map';
 import {
@@ -35,12 +43,29 @@ export interface ClipRenderJob {
 	minFrameSpacing: number;
 	/** Hard trim in seconds; 0 or Infinity means "use the whole clip". */
 	maxClipSeconds: number;
+	/** Seconds into the clip where rendering starts (a highlight segment); 0 for the beginning. */
+	startSeconds: number;
 	wantAudio: boolean;
 	preferHardware: boolean;
 	/** Strength of the software stabilizer, or `off` to skip the motion analysis pass. */
 	stabilize: StabilizerSetting;
 	/** How automatically detected faces are obscured, or `off` to skip face detection. */
 	faceBlur: FaceBlurSetting;
+	/** Fills the bars around a letterboxed clip with a blurred copy of itself instead of black. */
+	blurredBackdrop: boolean;
+	/** Cut effects at the start and end of the clip, or null for hard cuts. */
+	transitions: SegmentTransitions | null;
+	/** Seed for random-looking effects, so each clip glitches differently but reproducibly. */
+	effectSeed: number;
+	/** Pops the title in at the start of this clip (the first clip of a highlight). */
+	titleIntro: boolean;
+	/** Audio fade at both ends of the clip in seconds, which keeps fast cuts free of clicks. */
+	audioFadeSeconds: number;
+	/**
+	 * Cuts audio exactly at the clip's length instead of letting the last packet run over. A
+	 * highlight has many short segments, and those few milliseconds per cut would add up.
+	 */
+	exactLength: boolean;
 	overlay: ImageBitmap | null;
 	overlayX: number;
 	overlayY: number;
@@ -65,16 +90,31 @@ export interface ClipRenderResult {
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** Splits a canonical (48 kHz stereo) sample into a transferable planar buffer. */
-const toPlanarStereo = (sample: AudioSample): Float32Array => {
-	const frames = sample.numberOfFrames;
+/**
+ * Splits a canonical (48 kHz stereo) sample into a transferable planar buffer, keeping only its
+ * first `frames` frames.
+ */
+const toPlanarStereo = (sample: AudioSample, frames = sample.numberOfFrames): Float32Array => {
 	const data = new Float32Array(frames * AUDIO_CHANNELS);
 	for (let channel = 0; channel < AUDIO_CHANNELS; channel++) {
 		const plane = data.subarray(channel * frames, (channel + 1) * frames);
 		const sourceChannel = Math.min(channel, sample.numberOfChannels - 1);
-		sample.copyTo(plane, { planeIndex: sourceChannel, format: 'f32-planar' });
+		sample.copyTo(plane, { planeIndex: sourceChannel, format: 'f32-planar', frameCount: frames });
 	}
 	return data;
+};
+
+/** Linear fade-in/out over `fade` seconds at both ends of a `duration`-long clip, in place. */
+const applyEdgeFade = (data: Float32Array, frames: number, startedAt: number, duration: number, fade: number) => {
+	if (fade <= 0) return;
+	const endsAt = startedAt + frames / AUDIO_SAMPLE_RATE;
+	if (startedAt >= fade && endsAt <= duration - fade) return;
+	for (let index = 0; index < frames; index++) {
+		const time = startedAt + index / AUDIO_SAMPLE_RATE;
+		const gain = Math.max(0, Math.min(1, time / fade, (duration - time) / fade));
+		if (gain >= 1) continue;
+		for (let channel = 0; channel < AUDIO_CHANNELS; channel++) data[channel * frames + index] *= gain;
+	}
 };
 
 /**
@@ -137,6 +177,7 @@ export async function renderClip(
 	const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 	if (!ctx) throw new Error('Could not create a 2D rendering context.');
 	const gpsMap = job.gps ? new GpsMiniMap(job.gps, job.width, job.height) : null;
+	const backdrop = job.blurredBackdrop ? new BlurredBackdrop(job.width, job.height) : null;
 	let faceBlurrer: FaceBlurrer | null = null;
 
 	const input = new Input({ formats: ALL_FORMATS, source: new BlobSource(job.file) });
@@ -147,18 +188,21 @@ export async function renderClip(
 
 		const firstTimestamp = await videoTrack.getFirstTimestamp();
 		const trackDuration = await videoTrack.computeDuration();
+		const available = Math.max(trackDuration - firstTimestamp, 0);
+		const offset = Math.min(Math.max(0, job.startSeconds), available);
+		const readStart = firstTimestamp + offset;
 		const limit = job.maxClipSeconds > 0 ? job.maxClipSeconds : Infinity;
-		const clipDuration = Math.min(Math.max(trackDuration - firstTimestamp, 0), limit);
+		const clipDuration = Math.min(available - offset, limit);
 		if (clipDuration <= 0) throw new Error('Clip is empty');
 
-		const readEnd = firstTimestamp + clipDuration;
+		const readEnd = readStart + clipDuration;
 
 		const preset = stabilizerPreset(job.stabilize);
 		let stabilizer: StabilizerPlan | null = null;
 		if (preset && !isCanceled()) {
 			const startedAt = performance.now();
 			try {
-				stabilizer = await analyzeClipMotion(videoTrack, firstTimestamp, readEnd, preset, isCanceled);
+				stabilizer = await analyzeClipMotion(videoTrack, readStart, readEnd, preset, isCanceled);
 				if (stabilizer) {
 					const zoom = Math.round((stabilizer.zoom - 1) * 1000) / 10;
 					sink.log(
@@ -212,44 +256,63 @@ export async function renderClip(
 			let lastRelative = -Infinity;
 			let isFirstFrame = true;
 			let clipEnd = 0;
+			// A segment that starts between two frames first receives the frame covering its start.
+			// The clip's clock begins at that frame, so frames stay evenly spaced from zero.
+			let origin = readStart;
 
-			for await (const sample of sink_.samples(firstTimestamp, readEnd)) {
+			for await (const sample of sink_.samples(readStart, readEnd)) {
 				if (isCanceled()) {
 					sample.close();
 					break;
 				}
-				const relative = sample.timestamp - firstTimestamp;
+				if (isFirstFrame && sample.timestamp < readStart) origin = sample.timestamp;
+				const relative = sample.timestamp - origin;
+				if (relative >= clipDuration - 1e-6) {
+					sample.close();
+					break;
+				}
 				if (!isFirstFrame && relative - lastRelative < job.minFrameSpacing) {
 					sample.close();
 					continue;
 				}
 
+				const timestamp = Math.max(0, relative);
+				const effect = effectAt(job.transitions, timestamp, job.frameInterval, clipDuration, job.effectSeed);
+
 				ctx.fillStyle = '#000000';
 				ctx.fillRect(0, 0, job.width, job.height);
-				if (stabilizer) {
-					// The correction is relative to the picture, not to the canvas, so a letterboxed
-					// clip is not over-corrected by the width of its black bars.
-					const content = drawnContentSize(
-						sample.displayWidth,
-						sample.displayHeight,
-						job.width,
-						job.height,
-						job.fit,
-					);
-					ctx.save();
-					applyStabilizerTransform(ctx, stabilizer, sample.timestamp, content, job);
-					sample.drawWithFit(ctx, { fit: job.fit });
-					ctx.restore();
-				} else {
-					sample.drawWithFit(ctx, { fit: job.fit });
-				}
+				// Called twice by a whip pan, which tiles the frame across the cut.
+				drawWithEffect(ctx, job.width, job.height, effect, () => {
+					backdrop?.draw(ctx, job.width, job.height, (backdropCtx) => {
+						sample.drawWithFit(backdropCtx, { fit: 'cover' });
+					});
+					if (stabilizer) {
+						// The correction is relative to the picture, not to the canvas, so a letterboxed
+						// clip is not over-corrected by the width of its black bars.
+						const content = drawnContentSize(
+							sample.displayWidth,
+							sample.displayHeight,
+							job.width,
+							job.height,
+							job.fit,
+						);
+						ctx.save();
+						applyStabilizerTransform(ctx, stabilizer, sample.timestamp, content, job);
+						sample.drawWithFit(ctx, { fit: job.fit });
+						ctx.restore();
+					} else {
+						sample.drawWithFit(ctx, { fit: job.fit });
+					}
+				});
 				sample.close();
 				// Faces are hidden before anything is drawn on top, so the title and the mini map
 				// stay sharp and can never be smeared by a detection that overlaps them.
 				faceBlurrer?.apply(canvas, ctx);
-				if (job.overlay) ctx.drawImage(job.overlay, job.overlayX, job.overlayY);
+				applyEffectOverlay(ctx, canvas, job.width, job.height, effect);
+				if (job.overlay) {
+					drawTitle(ctx, job.overlay, job.overlayX, job.overlayY, job.titleIntro ? timestamp : null);
+				}
 
-				const timestamp = Math.max(0, relative);
 				gpsMap?.draw(ctx, timestamp);
 				// Snapshotting the canvas is what hands the pixels over to the encoder thread; from
 				// here on the frame is just a handle, so it can safely cross a worker boundary.
@@ -299,11 +362,11 @@ export async function renderClip(
 
 			const normalizer = new AudioNormalizer();
 			const sink_ = new AudioSampleSink(audioTrack);
-			for await (const sample of sink_.samples(firstTimestamp, readEnd)) {
+			for await (const sample of sink_.samples(readStart, readEnd)) {
 				let normalized: AudioSample | null = null;
 				try {
 					if (isCanceled()) break;
-					const relative = sample.timestamp - firstTimestamp;
+					const relative = sample.timestamp - readStart;
 					if (relative < -1e-6) continue;
 
 					// The source channel layout and sample rate are irrelevant here: everything is
@@ -311,9 +374,14 @@ export async function renderClip(
 					normalized = normalizer.convert(sample);
 					if (normalized.numberOfFrames === 0) continue;
 
-					const startedAt = Math.max(0, normalized.timestamp - firstTimestamp);
-					const frames = normalized.numberOfFrames;
-					const data = toPlanarStereo(normalized);
+					const startedAt = Math.max(0, normalized.timestamp - readStart);
+					if (job.exactLength && startedAt >= clipDuration - 1e-6) break;
+					const frames = job.exactLength
+						? Math.min(normalized.numberOfFrames, Math.ceil((clipDuration - startedAt) * AUDIO_SAMPLE_RATE))
+						: normalized.numberOfFrames;
+					if (frames <= 0) continue;
+					const data = toPlanarStereo(normalized, frames);
+					applyEdgeFade(data, frames, startedAt, clipDuration, job.audioFadeSeconds);
 					await sink.audio(data, frames, startedAt);
 					audioEnd = startedAt + frames / AUDIO_SAMPLE_RATE;
 				} finally {

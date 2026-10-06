@@ -176,6 +176,17 @@
 								<span class="field-label">Size (%)</span>
 								<input type="number" id="title-scale" min="2" max="30" step="0.5" />
 							</label>
+							<label class="field field-title-style">
+								<span class="field-label">Style</span>
+								<select id="title-style" title="Font style of the title. The bold, caption and meme styles are the ones short-form videos use.">
+									<option value="classic">Classic</option>
+									<option value="bold">Bold outline (TikTok)</option>
+									<option value="caption">Caption box</option>
+									<option value="neon">Neon glow</option>
+									<option value="meme">Meme (Impact)</option>
+									<option value="pop">Pop 3D</option>
+								</select>
+							</label>
 						</div>
 						<hr class="overlay-separator" />
 						<h3 class="overlay-group-title"><span class="control-icon" aria-hidden="true">⌖</span>GPS mini map <span class="pill pill-muted">Optional</span></h3>
@@ -313,8 +324,117 @@
 				</div>
 			</section>
 
+			<section class="panel" id="panel-output">
+				<h2><span class="step">4</span> Output &amp; preview</h2>
+				<div class="output-layout">
+					<div class="output-controls">
+						<div class="choice-group" role="radiogroup" aria-label="What to create">
+							<label class="choice">
+								<input type="radio" name="output-mode" id="mode-merge" value="merge" />
+								<span class="choice-body">
+									<span class="choice-title"><span class="control-icon" aria-hidden="true">⧉</span>Full merge</span>
+									<span class="choice-note">Every selected clip, back to back</span>
+								</span>
+							</label>
+							<label class="choice">
+								<input type="radio" name="output-mode" id="mode-highlight" value="highlight" />
+								<span class="choice-body">
+									<span class="choice-title"><span class="control-icon" aria-hidden="true">✦</span>Highlight reel</span>
+									<span class="choice-note">A short clip of every video for TikTok, Reels &amp; Shorts</span>
+								</span>
+							</label>
+						</div>
+
+						<div id="highlight-controls" class="highlight-controls">
+							<h3 class="overlay-group-title">Highlight format</h3>
+							<div class="choice-group" role="radiogroup" aria-label="Highlight format">
+								<label class="choice choice-format">
+									<input type="radio" name="highlight-format" id="format-vertical" value="9:16" />
+									<span class="choice-body">
+										<span class="format-icon format-icon-vertical" aria-hidden="true"></span>
+										<span class="choice-title">9:16 Vertical</span>
+										<span class="choice-note">TikTok · Instagram Reels · YouTube Shorts</span>
+									</span>
+								</label>
+								<label class="choice choice-format">
+									<input type="radio" name="highlight-format" id="format-landscape" value="16:9" />
+									<span class="choice-body">
+										<span class="format-icon format-icon-landscape" aria-hidden="true"></span>
+										<span class="choice-title">16:9 Landscape</span>
+										<span class="choice-note">YouTube · Facebook · X</span>
+									</span>
+								</label>
+							</div>
+							<div class="highlight-grid">
+								<label class="field field-highlight-seconds">
+									<span class="field-label"><span class="control-icon" aria-hidden="true">◷</span>Seconds per clip</span>
+									<input type="number" id="highlight-seconds" min="0.5" max="10" step="0.5" />
+								</label>
+								<label class="field field-highlight-max">
+									<span class="field-label"><span class="control-icon" aria-hidden="true">⏱</span>Max length (s)</span>
+									<input type="number" id="highlight-max" min="5" max="180" step="1" />
+								</label>
+								<label class="field">
+									<span class="field-label"><span class="control-icon" aria-hidden="true">✂</span>Take from</span>
+									<select id="highlight-pick" title="Which part of each clip goes into the reel">
+										<option value="middle">Middle of each clip</option>
+										<option value="start">Start of each clip</option>
+										<option value="end">End of each clip</option>
+									</select>
+								</label>
+								<label class="field">
+									<span class="field-label"><span class="control-icon" aria-hidden="true">▣</span>Framing</span>
+									<select id="highlight-framing" title="How clips that do not match the format are fitted">
+										<option value="blur">Blurred background (keeps the whole picture)</option>
+										<option value="crop">Crop to fill</option>
+									</select>
+								</label>
+								<label class="field">
+									<span class="field-label"><span class="control-icon" aria-hidden="true">⇄</span>Transition</span>
+									<select id="transition" title="Effect at every cut between two clips">
+										<option value="mix">Mix (varies every cut)</option>
+										<option value="zoom">Zoom punch</option>
+										<option value="whip">Whip pan</option>
+										<option value="flash">Flash</option>
+										<option value="glitch">Glitch</option>
+										<option value="spin">Spin</option>
+										<option value="dip">Dip to black</option>
+										<option value="none">Hard cut</option>
+									</select>
+								</label>
+							</div>
+							<p id="highlight-info" class="muted small"></p>
+						</div>
+						<p id="merge-mode-info" class="muted small">The preview plays the merged video exactly as it will be encoded. Switch to <strong>Highlight reel</strong> for a short vertical or landscape clip with transitions.</p>
+					</div>
+
+					<div id="player-block" class="player-block">
+						<div class="preview-heading">
+							<span id="player-label" class="muted small">Preview</span>
+							<button id="player-fullscreen" class="btn btn-white preview-fullscreen" type="button">Full screen</button>
+						</div>
+						<div class="player-stage">
+							<canvas id="player-canvas" class="player-canvas" width="540" height="960" tabindex="0" title="Click to play or pause" aria-label="Live preview of the output video"></canvas>
+						</div>
+						<div class="player-controls">
+							<button id="player-prev" class="btn btn-white player-button" type="button" title="Previous clip" aria-label="Previous clip">⏮</button>
+							<button id="player-play" class="btn btn-green player-button player-play" type="button">▶ Play</button>
+							<button id="player-next" class="btn btn-white player-button" type="button" title="Next clip" aria-label="Next clip">⏭</button>
+							<input type="range" id="player-seek" class="player-seek" min="0" max="1" step="0.01" value="0" aria-label="Preview position" />
+							<span id="player-time" class="player-time">0.0s / 0.0s</span>
+							<button id="player-mute" class="btn btn-white player-button" type="button" title="Mute preview" aria-label="Mute preview" aria-pressed="false">🔊</button>
+						</div>
+						<span id="player-note" class="muted small">Stabilization and face privacy are applied when the video is rendered.</span>
+						<label id="player-safe-wrap" class="check small" title="Shades where TikTok, Reels and Shorts draw their own buttons and captions. Only shown in the preview, never rendered.">
+							<input type="checkbox" id="player-safe" />
+							<span>Show app UI zones (header, buttons, caption)</span>
+						</label>
+					</div>
+				</div>
+			</section>
+
 			<section class="panel" id="panel-merge">
-				<h2><span class="step">4</span> Merge</h2>
+				<h2><span class="step">5</span> <span id="merge-heading">Merge</span></h2>
 				<p id="merge-summary" class="muted">Nothing to merge yet.</p>
 				<div class="row">
 					<button id="start" class="btn btn-green" disabled>Start merge</button>
